@@ -172,3 +172,28 @@ foreach(target IN ITEMS nfsu2_xdk_graphics nfsu2_xdk_audio)
         POSITION_INDEPENDENT_CODE ON
     )
 endforeach()
+
+# Vulkan rendering backend for Android ARM64
+add_library(nfsu2_vulkan_backend STATIC
+    "${NFSU2_RUNTIME_DIR}/gpu/render_thread.cpp"
+    "${NFSU2_RUNTIME_DIR}/gpu/vulkan.cpp"
+    "${NFSU2_RUNTIME_DIR}/gpu/spirv.cpp"
+)
+
+target_include_directories(nfsu2_vulkan_backend PRIVATE
+    "${NFSU2_RUNTIME_DIR}"
+    "${NFSU2_GENERATED_DIR}"
+)
+
+target_compile_features(nfsu2_vulkan_backend PRIVATE cxx_std_23)
+
+target_compile_options(nfsu2_vulkan_backend PRIVATE
+    -fno-strict-aliasing
+    -fsigned-char
+    -Wall
+    -Wextra
+)
+
+set_target_properties(nfsu2_vulkan_backend PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
