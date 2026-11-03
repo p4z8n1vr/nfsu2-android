@@ -110,3 +110,31 @@ target_compile_options(nfsu2_runtime_core PRIVATE
 set_target_properties(nfsu2_runtime_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
+
+# Xbox executable boot support
+target_sources(nfsu2_runtime_core PRIVATE
+    "${NFSU2_RUNTIME_DIR}/kernel/boot.cpp"
+)
+
+# Xbox XDK base services
+add_library(nfsu2_xdk_base STATIC
+    "${NFSU2_RUNTIME_DIR}/xdk/xapi.cpp"
+)
+
+target_include_directories(nfsu2_xdk_base PRIVATE
+    "${NFSU2_RUNTIME_DIR}"
+    "${NFSU2_GENERATED_DIR}"
+)
+
+target_compile_features(nfsu2_xdk_base PRIVATE cxx_std_23)
+
+target_compile_options(nfsu2_xdk_base PRIVATE
+    -fno-strict-aliasing
+    -fsigned-char
+    -Wall
+    -Wextra
+)
+
+set_target_properties(nfsu2_xdk_base PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
