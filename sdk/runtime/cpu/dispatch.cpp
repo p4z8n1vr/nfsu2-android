@@ -10,12 +10,6 @@
 #include "cpu/x86_ops.h"
 #include "kernel/kernel.h"
 
-#ifdef _WIN32
-#include <intrin.h>
-#else
-#include <x86intrin.h>
-#endif
-
 namespace {
 
 std::vector<X86Func*> g_table;  // one slot per code byte
