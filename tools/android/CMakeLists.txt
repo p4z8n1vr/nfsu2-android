@@ -119,6 +119,7 @@ target_sources(nfsu2_runtime_core PRIVATE
 # Xbox XDK base services
 add_library(nfsu2_xdk_base STATIC
     "${NFSU2_RUNTIME_DIR}/xdk/xapi.cpp"
+    "${NFSU2_RUNTIME_DIR}/xdk/xnet.cpp"
 )
 
 target_include_directories(nfsu2_xdk_base PRIVATE
@@ -196,4 +197,38 @@ target_compile_options(nfsu2_vulkan_backend PRIVATE
 
 set_target_properties(nfsu2_vulkan_backend PROPERTIES
     POSITION_INDEPENDENT_CODE ON
+)
+
+# Android native linking validation
+add_library(nfsu2_link_probe SHARED
+    "${CMAKE_CURRENT_LIST_DIR}/link_probe.cpp"
+)
+
+target_compile_features(nfsu2_link_probe PRIVATE cxx_std_23)
+
+# Require every symbol to be resolved.
+# Do not allow the linker to silently skip unused archive objects.
+target_link_libraries(nfsu2_link_probe PRIVATE
+    "-Wl,--whole-archive"
+
+    nfsu2_recompiled
+    nfsu2_runtime_core
+    nfsu2_xdk_base
+    nfsu2_xdk_graphics
+    nfsu2_xdk_audio
+    nfsu2_vulkan_backend
+
+    "-Wl,--no-whole-archive"
+
+    vulkan
+    android
+    log
+    dl
+    m
+)
+
+target_link_options(nfsu2_link_probe PRIVATE
+    -fuse-ld=lld
+    "LINKER:--no-undefined"
+    "LINKER:--error-limit=0"
 )
