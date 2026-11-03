@@ -138,3 +138,37 @@ target_compile_options(nfsu2_xdk_base PRIVATE
 set_target_properties(nfsu2_xdk_base PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
+
+# Xbox Direct3D 8 high-level emulation and GPU utilities
+add_library(nfsu2_xdk_graphics STATIC
+    "${NFSU2_RUNTIME_DIR}/xdk/d3d8.cpp"
+    "${NFSU2_RUNTIME_DIR}/gpu/texture.cpp"
+    "${NFSU2_RUNTIME_DIR}/gpu/vertex.cpp"
+    "${NFSU2_RUNTIME_DIR}/gpu/shaders.cpp"
+)
+
+# Xbox DirectSound high-level emulation
+add_library(nfsu2_xdk_audio STATIC
+    "${NFSU2_RUNTIME_DIR}/xdk/dsound.cpp"
+)
+
+# Shared Android compilation settings
+foreach(target IN ITEMS nfsu2_xdk_graphics nfsu2_xdk_audio)
+    target_include_directories(${target} PRIVATE
+        "${NFSU2_RUNTIME_DIR}"
+        "${NFSU2_GENERATED_DIR}"
+    )
+
+    target_compile_features(${target} PRIVATE cxx_std_23)
+
+    target_compile_options(${target} PRIVATE
+        -fno-strict-aliasing
+        -fsigned-char
+        -Wall
+        -Wextra
+    )
+
+    set_target_properties(${target} PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+    )
+endforeach()
