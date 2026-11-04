@@ -199,6 +199,33 @@ set_target_properties(nfsu2_vulkan_backend PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+# Android native display host
+add_library(nfsu2_android_host STATIC
+    "${CMAKE_CURRENT_LIST_DIR}/android_host.cpp"
+)
+
+target_include_directories(nfsu2_android_host PRIVATE
+    "${NFSU2_RUNTIME_DIR}"
+    "${NFSU2_GENERATED_DIR}"
+)
+
+target_compile_features(nfsu2_android_host PRIVATE cxx_std_23)
+
+target_compile_definitions(nfsu2_android_host PRIVATE
+    VK_USE_PLATFORM_ANDROID_KHR
+)
+
+target_compile_options(nfsu2_android_host PRIVATE
+    -fno-strict-aliasing
+    -fsigned-char
+    -Wall
+    -Wextra
+)
+
+set_target_properties(nfsu2_android_host PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+
 # Android native linking validation
 add_library(nfsu2_link_probe SHARED
     "${CMAKE_CURRENT_LIST_DIR}/link_probe.cpp"
@@ -217,6 +244,7 @@ target_link_libraries(nfsu2_link_probe PRIVATE
     nfsu2_xdk_graphics
     nfsu2_xdk_audio
     nfsu2_vulkan_backend
+    nfsu2_android_host
 
     "-Wl,--no-whole-archive"
 
@@ -231,4 +259,15 @@ target_link_options(nfsu2_link_probe PRIVATE
     -fuse-ld=lld
     "LINKER:--no-undefined"
     "LINKER:--error-limit=0"
+)
+
+# Android native input, audio and lifecycle
+target_sources(nfsu2_android_host PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/android_input.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/android_audio.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/android_lifecycle.cpp"
+)
+
+target_link_libraries(nfsu2_link_probe PRIVATE
+    aaudio
 )
