@@ -21,7 +21,6 @@ internal object NativeValidationStatus {
     const val WRONG_ENTRY_POINT = 8
     const val WRONG_RELEASE = 9
     const val MISSING_GAME_DATA = 10
-    const val GAME_DIRECTORY_UNAVAILABLE = 11
     const val EXECUTABLE_TOO_LARGE = 12
     const val READ_ERROR = 13
 }

@@ -6,12 +6,10 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include "kernel/crypto.h"
@@ -28,7 +26,6 @@ constexpr uint32_t kExpectedTitle = 0x45410071;
 constexpr uint32_t kExpectedEntry = 0x0021B32E;
 
 constexpr size_t kMaxXbeSize = 64ULL * 1024 * 1024;
-constexpr size_t kReadChunk = 64 * 1024;
 
 ValidationResult MakeResult(
     ValidationStatus status,
@@ -63,63 +60,6 @@ bool EndsWith(
 ) {
     return value.size() >= suffix.size() &&
         value.substr(value.size() - suffix.size()) == suffix;
-}
-
-bool ReadLimited(
-    int fd,
-    std::vector<uint8_t>& output,
-    bool& too_large
-) {
-    output.clear();
-    too_large = false;
-
-    struct stat st{};
-
-    if (fstat(fd, &st) == 0 &&
-        S_ISREG(st.st_mode) &&
-        st.st_size > static_cast<off_t>(kMaxXbeSize)) {
-        too_large = true;
-        return false;
-    }
-
-    std::array<uint8_t, kReadChunk> buffer{};
-    uint64_t offset = 0;
-
-    for (;;) {
-        const size_t remaining =
-            kMaxXbeSize + 1 - output.size();
-
-        const size_t request =
-            std::min(buffer.size(), remaining);
-
-        const ssize_t count = pread(
-            fd,
-            buffer.data(),
-            request,
-            static_cast<off_t>(offset)
-        );
-
-        if (count < 0) {
-            if (errno == EINTR) continue;
-            return false;
-        }
-
-        if (count == 0) return true;
-
-        output.insert(
-            output.end(),
-            buffer.begin(),
-            buffer.begin() + count
-        );
-
-        offset += static_cast<uint64_t>(count);
-
-        if (output.size() > kMaxXbeSize) {
-            too_large = true;
-            output.clear();
-            return false;
-        }
-    }
 }
 
 std::string CalculateSha1(
@@ -254,80 +194,38 @@ ValidationResult ValidateXbeBytes(
     return result;
 }
 
-bool HasDiscData(const kernel::Disc::Entry& directory) {
-    for (const auto& entry : directory.children) {
-        if (entry.dir) {
-            if (HasDiscData(entry)) return true;
-        } else if (Lower(entry.name) != "default.xbe") {
-            return true;
-        }
-    }
+bool HasDiscData(const kernel::Disc& disc) {
+    const auto* data_directory =
+        disc.Find(std::vector<std::string>{"NFSUNDER"});
 
-    return false;
-}
-
-bool HasExtractedData(
-    int fd,
-    std::string_view filesystem_path
-) {
-    if (filesystem_path.empty()) return false;
-
-    const std::string path_string(filesystem_path);
-
-    struct stat descriptor_stat{};
-    struct stat path_stat{};
-
-    if (fstat(fd, &descriptor_stat) != 0 ||
-        stat(path_string.c_str(), &path_stat) != 0) {
+    if (!data_directory || !data_directory->dir) {
         return false;
     }
 
-    // The supplied path must point to the selected descriptor.
-    if (descriptor_stat.st_dev != path_stat.st_dev ||
-        descriptor_stat.st_ino != path_stat.st_ino) {
-        return false;
-    }
-
-    const fs::path game_directory =
-        fs::path(path_string).parent_path();
-
-    if (game_directory.empty()) return false;
-
-    std::error_code error;
-
-    fs::recursive_directory_iterator it(
-        game_directory,
-        fs::directory_options::skip_permission_denied,
-        error
+    const auto* index = disc.Find(
+        std::vector<std::string>{"NFSUNDER", "ZDIR.BIN"}
     );
 
-    const fs::recursive_directory_iterator end;
-
-    size_t visited = 0;
-
-    while (!error && it != end && visited++ < 200000) {
-        std::error_code entry_error;
-        const auto& entry = *it;
-
-        if (entry.is_regular_file(entry_error)) {
-            const std::string name =
-                Lower(entry.path().filename().string());
-
-            const std::string extension =
-                Lower(entry.path().extension().string());
-
-            if (name != "default.xbe" &&
-                extension != ".iso" &&
-                extension != ".xbe" &&
-                extension != ".log") {
-                return true;
-            }
-        }
-
-        it.increment(error);
+    if (!index || index->dir ||
+        index->size < 24 ||
+        index->size % 24 != 0) {
+        return false;
     }
 
-    return false;
+    for (int id = 0; id < 10; ++id) {
+        const std::string filename =
+            "ZZDATA" + std::to_string(id) + ".BIN";
+
+        const auto* archive = disc.Find(
+            std::vector<std::string>{"NFSUNDER", filename}
+        );
+
+        if (!archive || archive->dir || archive->size == 0) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 ValidationResult ValidateIso(int fd) {
@@ -375,10 +273,7 @@ ValidationResult ValidateIso(int fd) {
 
     if (!result.Ready()) return result;
 
-    const auto* root =
-        disc.Find(std::vector<std::string>{});
-
-    if (!root || !HasDiscData(*root)) {
+    if (!HasDiscData(disc)) {
         result.status = ValidationStatus::MissingGameData;
         result.diagnostic = "Disc does not contain additional game data";
     }
@@ -386,63 +281,14 @@ ValidationResult ValidateIso(int fd) {
     return result;
 }
 
-ValidationResult ValidateXbe(
-    int fd,
-    std::string_view filesystem_path
-) {
-    std::vector<uint8_t> bytes;
-    bool too_large = false;
-
-    if (!ReadLimited(fd, bytes, too_large)) {
-        return MakeResult(
-            too_large
-                ? ValidationStatus::ExecutableTooLarge
-                : ValidationStatus::ReadError,
-            GameType::Xbe,
-            too_large
-                ? "XBE exceeds the validation size limit"
-                : "Unable to read XBE"
-        );
-    }
-
-    ValidationResult result =
-        ValidateXbeBytes(bytes, GameType::Xbe);
-
-    if (!result.Ready()) return result;
-
-    if (filesystem_path.empty()) {
-        result.status =
-            ValidationStatus::GameDirectoryUnavailable;
-        result.diagnostic =
-            "XBE verified, but its game directory is unresolved";
-        return result;
-    }
-
-    if (!HasExtractedData(fd, filesystem_path)) {
-        result.status = ValidationStatus::MissingGameData;
-        result.diagnostic =
-            "No accessible additional game data was found";
-    }
-
-    return result;
-}
 
 } // namespace
 
 ValidationResult ValidateFile(
     int fd,
-    std::string_view filename,
-    std::string_view filesystem_path
+    std::string_view filename
 ) {
-    const std::string name = Lower(filename);
-
-    GameType type = GameType::Unknown;
-
-    if (EndsWith(name, ".iso")) {
-        type = GameType::Iso;
-    } else if (EndsWith(name, ".xbe")) {
-        type = GameType::Xbe;
-    } else {
+    if (!EndsWith(Lower(filename), ".iso")) {
         return MakeResult(
             ValidationStatus::UnsupportedFormat,
             GameType::Unknown
@@ -452,7 +298,7 @@ ValidationResult ValidateFile(
     if (fd < 0) {
         return MakeResult(
             ValidationStatus::InvalidDescriptor,
-            type
+            GameType::Iso
         );
     }
 
@@ -467,17 +313,14 @@ ValidationResult ValidateFile(
             non_seekable
                 ? ValidationStatus::NonSeekableDescriptor
                 : ValidationStatus::ReadError,
-            type,
+            GameType::Iso,
             non_seekable
                 ? "Selected descriptor does not support random access"
                 : "Unable to read selected descriptor"
         );
     }
 
-    if (type == GameType::Iso)
-        return ValidateIso(fd);
-
-    return ValidateXbe(fd, filesystem_path);
+    return ValidateIso(fd);
 }
 
 } // namespace android_game

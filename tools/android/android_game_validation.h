@@ -18,15 +18,13 @@ enum class ValidationStatus : int32_t {
     WrongEntryPoint = 8,
     WrongRelease = 9,
     MissingGameData = 10,
-    GameDirectoryUnavailable = 11,
     ExecutableTooLarge = 12,
     ReadError = 13
 };
 
 enum class GameType : int32_t {
     Unknown = 0,
-    Iso = 1,
-    Xbe = 2
+    Iso = 1
 };
 
 struct ValidationResult {
@@ -44,12 +42,9 @@ struct ValidationResult {
     }
 };
 
-// The caller owns fd; filesystem_path must identify the same file.
-//
 [[nodiscard]] ValidationResult ValidateFile(
     int fd,
-    std::string_view filename,
-    std::string_view filesystem_path = {}
+    std::string_view filename
 );
 
 } // namespace android_game

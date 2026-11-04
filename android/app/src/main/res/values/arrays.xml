@@ -3,6 +3,5 @@
     <string-array name="supported_game_extensions">
         <item>.iso</item>
         <item>.xiso.iso</item>
-        <item>.xbe</item>
     </string-array>
 </resources>

@@ -37,8 +37,7 @@ object NativeBridge {
 
     external fun validateGame(
         descriptor: Int,
-        filename: String,
-        filesystemPath: String?
+        filename: String
     ): GameValidationResult
 
     external fun firstSwapSeen(): Boolean

@@ -81,7 +81,6 @@ internal object GameFilePicker {
         val name = filename.lowercase(Locale.ROOT)
 
         return when {
-            name.endsWith(".xbe") -> R.string.game_type_xbe
             name.endsWith(".iso") -> R.string.game_type_iso
             else -> R.string.game_type_unknown
         }

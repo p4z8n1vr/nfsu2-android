@@ -1,12 +1,12 @@
 package com.p4z8n1vr.nfsu2
 
 import android.app.Activity
-import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.util.Log
 import android.view.SurfaceHolder
@@ -14,6 +14,7 @@ import android.view.SurfaceView
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
+import java.io.File
 import java.io.FileNotFoundException
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -30,21 +31,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var storageStatusView: TextView
     private lateinit var storageButton: Button
     private lateinit var selectGameButton: Button
+    private lateinit var graphicsButton: Button
     private lateinit var selectedGameView: TextView
     private lateinit var selectedGameTypeView: TextView
     private lateinit var selectedGameStatusView: TextView
     private lateinit var validationDetailsView: TextView
 
-    private val validationExecutor =
-        Executors.newSingleThreadExecutor()
+    private val validationExecutor = Executors.newSingleThreadExecutor()
 
     private var validationTask: Future<*>? = null
     private var selectionVersion = 0L
 
     private var nativeReady = false
     private var surfaceAttached = false
+    private var graphicsRequested = false
+    private var gameReady = false
 
     private var selectedGameUri: Uri? = null
+    private var pickerOpen = false
+    private var manualSelectionActive = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,6 +70,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         storageStatusView = findViewById(R.id.storage_status)
         storageButton = findViewById(R.id.grant_storage_access)
         selectGameButton = findViewById(R.id.select_game_file)
+        graphicsButton = findViewById(R.id.graphics_control)
         selectedGameView = findViewById(R.id.selected_game)
         selectedGameTypeView = findViewById(R.id.selected_game_type)
         selectedGameStatusView = findViewById(R.id.selected_game_status)
@@ -78,6 +84,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             openGamePicker()
         }
 
+        graphicsButton.setOnClickListener {
+            if (graphicsRequested) {
+                releaseGraphics()
+            } else {
+                initializeGraphics()
+            }
+        }
+
         updateStorageStatus()
         initializeNative()
 
@@ -87,10 +101,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         updateStorageStatus()
+
+        if (nativeReady &&
+            Environment.isExternalStorageManager() &&
+            !pickerOpen &&
+            !manualSelectionActive
+        ) {
+            refreshGameLibrary()
+        }
+    }
+
+    override fun onPause() {
+        releaseGraphics()
+        super.onPause()
     }
 
     private fun updateStorageStatus() {
         val granted = Environment.isExternalStorageManager()
+
+        if (!granted && graphicsRequested) {
+            releaseGraphics()
+        }
 
         storageStatusView.setText(
             if (granted) {
@@ -108,6 +139,29 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 R.string.storage_access_granted
             } else {
                 R.string.grant_storage_access
+            }
+        )
+
+        updateGraphicsControls()
+    }
+
+    private fun updateGraphicsControls() {
+        graphicsButton.visibility =
+            if (
+                gameReady &&
+                nativeReady &&
+                Environment.isExternalStorageManager()
+            ) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+
+        graphicsButton.setText(
+            if (graphicsRequested) {
+                R.string.release_graphics
+            } else {
+                R.string.initialize_graphics
             }
         )
     }
@@ -142,9 +196,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun openGamePicker() {
+        pickerOpen = true
+
         runCatching {
             GameFilePicker.open(this)
         }.onFailure {
+            pickerOpen = false
             selectedGameStatusView.setText(
                 R.string.game_picker_unavailable
             )
@@ -162,6 +219,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (requestCode != GameFilePicker.REQUEST_CODE) {
             return
         }
+
+        pickerOpen = false
 
         if (resultCode != RESULT_OK) {
             selectedGameStatusView.setText(
@@ -205,10 +264,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return
         }
 
+        manualSelectionActive = true
         selectedGameUri = uri
 
-        val displayName = filename
-            ?: getString(R.string.game_filename_unknown)
+        val displayName =
+            filename ?: getString(R.string.game_filename_unknown)
 
         selectedGameView.text = getString(
             R.string.selected_game_name,
@@ -227,6 +287,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         uri: Uri,
         filename: String
     ) {
+        releaseGraphics()
+        gameReady = false
+        updateGraphicsControls()
+
         selectionVersion++
         val requestVersion = selectionVersion
 
@@ -240,15 +304,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         validationTask = validationExecutor.submit {
             val outcome = runCatching {
                 contentResolver.openFileDescriptor(uri, "r")?.use {
-                    NativeBridge.validateGame(
-                        it.fd,
-                        filename,
-                        if (uri.scheme == ContentResolver.SCHEME_FILE) {
-                            uri.path
-                        } else {
-                            null
-                        }
-                    )
+                    NativeBridge.validateGame(it.fd, filename)
                 } ?: throw FileNotFoundException()
             }
 
@@ -269,6 +325,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                         "Game validation failed",
                         error
                     )
+
+                    gameReady = false
+                    updateGraphicsControls()
 
                     selectedGameStatusView.setText(
                         R.string.game_validation_io_error
@@ -313,9 +372,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             NativeValidationStatus.MISSING_GAME_DATA ->
                 R.string.game_validation_missing_data
 
-            NativeValidationStatus.GAME_DIRECTORY_UNAVAILABLE ->
-                R.string.game_validation_directory_unavailable
-
             NativeValidationStatus.EXECUTABLE_TOO_LARGE ->
                 R.string.game_validation_xbe_too_large
 
@@ -330,18 +386,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun showValidationResult(
         result: GameValidationResult
     ) {
+        gameReady = result.status == NativeValidationStatus.READY
+        updateGraphicsControls()
+
         val message = getString(
             validationMessage(result.status)
         )
 
-        if (result.status == NativeValidationStatus.READY) {
-            selectedGameStatusView.text = message
-        } else {
-            selectedGameStatusView.text = getString(
-                R.string.game_validation_failed,
+        selectedGameStatusView.text =
+            if (gameReady) {
                 message
-            )
-        }
+            } else {
+                getString(
+                    R.string.game_validation_failed,
+                    message
+                )
+            }
 
         if (result.diagnostic.isNotBlank()) {
             Log.i(LOG_TAG, result.diagnostic)
@@ -374,9 +434,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun clearGameSelection() {
-        selectionVersion++
+        releaseGraphics()
+        manualSelectionActive = false
+        gameReady = false
+        updateGraphicsControls()
 
+        selectionVersion++
         validationTask?.cancel(true)
+
         selectedGameUri = null
 
         selectedGameView.setText(
@@ -388,6 +453,143 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         )
 
         validationDetailsView.visibility = View.GONE
+    }
+
+    private fun initializeGraphics() {
+        if (
+            !nativeReady ||
+            !gameReady ||
+            selectedGameUri == null ||
+            !Environment.isExternalStorageManager()
+        ) {
+            return
+        }
+
+        if (graphicsRequested) return
+
+        graphicsRequested = true
+        updateGraphicsControls()
+
+        showStatus(getString(R.string.graphics_initializing))
+        surfaceView.visibility = View.VISIBLE
+    }
+
+    private fun releaseGraphics() {
+        if (!graphicsRequested && !surfaceAttached) return
+
+        if (!detachNativeSurface()) return
+
+        graphicsRequested = false
+        surfaceView.visibility = View.GONE
+
+        updateGraphicsControls()
+        showStatus(getString(R.string.graphics_surface_released))
+    }
+
+    private fun refreshGameLibrary() {
+        releaseGraphics()
+        gameReady = false
+        updateGraphicsControls()
+
+        selectionVersion++
+        val requestVersion = selectionVersion
+
+        validationTask?.cancel(true)
+        validationDetailsView.visibility = View.GONE
+        selectedGameStatusView.setText(
+            R.string.game_library_scanning
+        )
+
+        validationTask = validationExecutor.submit {
+            val outcome = runCatching {
+                val directory = GameLibrary.ensureDirectory(this)
+                val candidates = GameLibrary.candidates(directory)
+
+                var selected: Pair<File, GameValidationResult>? = null
+
+                for (candidate in candidates) {
+                    if (Thread.currentThread().isInterrupted) break
+
+                    val validation = runCatching {
+                        ParcelFileDescriptor.open(
+                            candidate,
+                            ParcelFileDescriptor.MODE_READ_ONLY
+                        ).use { descriptor ->
+                            NativeBridge.validateGame(descriptor.fd, candidate.name)
+                        }
+                    }.onFailure { error ->
+                        Log.w(
+                            LOG_TAG,
+                            "Unable to validate ${candidate.name}",
+                            error
+                        )
+                    }.getOrNull()
+
+                    if (validation?.status ==
+                        NativeValidationStatus.READY
+                    ) {
+                        selected = candidate to validation
+                        break
+                    }
+                }
+
+                selected
+            }
+
+            runOnUiThread {
+                if (isFinishing ||
+                    isDestroyed ||
+                    requestVersion != selectionVersion ||
+                    manualSelectionActive
+                ) {
+                    return@runOnUiThread
+                }
+
+                outcome.onSuccess { selected ->
+                    if (selected == null) {
+                        selectedGameUri = null
+                        selectedGameView.setText(
+                            R.string.selected_game_none
+                        )
+                        selectedGameTypeView.setText(
+                            R.string.game_type_none
+                        )
+                        selectedGameStatusView.setText(
+                            R.string.game_library_not_found
+                        )
+                    } else {
+                        val (file, validation) = selected
+
+                        selectedGameUri = Uri.fromFile(file)
+                        selectedGameView.text = getString(
+                            R.string.selected_game_name,
+                            file.name
+                        )
+                        selectedGameTypeView.text = getString(
+                            R.string.selected_game_type,
+                            getString(
+                                GameFilePicker.getFileType(file.name)
+                            )
+                        )
+
+                        showValidationResult(validation)
+                    }
+                }.onFailure { error ->
+                    Log.e(LOG_TAG, "Game library scan failed", error)
+
+                    selectedGameUri = null
+                    selectedGameView.setText(
+                        R.string.selected_game_none
+                    )
+                    selectedGameTypeView.setText(
+                        R.string.game_type_none
+                    )
+                    selectedGameStatusView.setText(
+                        R.string.game_library_error
+                    )
+                }
+            }
+        }
     }
 
     private fun showStatus(message: String) {
@@ -426,26 +628,44 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 )
             )
         }
+
+        updateGraphicsControls()
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        if (!nativeReady || surfaceAttached) return
+        if (
+            !graphicsRequested ||
+            !nativeReady ||
+            surfaceAttached
+        ) {
+            return
+        }
 
         runCatching {
             NativeBridge.attachSurface(holder.surface)
         }.onSuccess { attached ->
             surfaceAttached = attached
 
-            showStatus(
-                getString(
-                    if (attached) {
-                        R.string.surface_attached
-                    } else {
-                        R.string.surface_initialization_failed
-                    }
+            if (attached) {
+                showStatus(
+                    getString(R.string.graphics_surface_ready)
                 )
-            )
+            } else {
+                graphicsRequested = false
+                surfaceView.visibility = View.GONE
+                updateGraphicsControls()
+
+                showStatus(
+                    getString(
+                        R.string.surface_initialization_failed
+                    )
+                )
+            }
         }.onFailure { error ->
+            graphicsRequested = false
+            surfaceView.visibility = View.GONE
+            updateGraphicsControls()
+
             showStatus(
                 getString(
                     R.string.surface_error,
@@ -464,11 +684,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        detachNativeSurface()
+        if (detachNativeSurface()) {
+            graphicsRequested = false
+            updateGraphicsControls()
+        }
     }
 
-    private fun detachNativeSurface() {
-        if (!surfaceAttached) return
+    private fun detachNativeSurface(): Boolean {
+        if (!surfaceAttached) return true
 
         val detached = runCatching {
             NativeBridge.detachSurface()
@@ -481,6 +704,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 getString(R.string.surface_detach_failed)
             )
         }
+
+        return detached
     }
 
     override fun onDestroy() {
@@ -489,7 +714,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         validationTask?.cancel(true)
         validationExecutor.shutdownNow()
 
+        releaseGraphics()
         detachNativeSurface()
+
         super.onDestroy()
     }
 }

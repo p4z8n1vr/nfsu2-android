@@ -24,14 +24,13 @@
     <string name="selected_game_type">File type: %1$s</string>
     <string name="game_type_none">Not selected</string>
     <string name="game_type_iso">Xbox ISO / XISO</string>
-    <string name="game_type_xbe">Xbox Executable (XBE)</string>
     <string name="game_type_unknown">Unknown</string>
     <string name="game_filename_unknown">Unknown filename</string>
     <string name="game_selection_idle">Choose a game file to continue.</string>
     <string name="game_selection_pending">File selected. Native validation is pending.</string>
     <string name="game_selection_cancelled">File selection cancelled.</string>
     <string name="game_selection_invalid">No valid file was returned by the picker.</string>
-    <string name="game_selection_unsupported">Unsupported file. Select an ISO, XISO or XBE file.</string>
+    <string name="game_selection_unsupported">Unsupported file. Select an Xbox ISO/XISO image.</string>
     <string name="game_selection_scheme_unsupported">The selected file URI is not supported.</string>
     <string name="game_picker_unavailable">Unable to open the device file picker.</string>
 
@@ -48,11 +47,19 @@
     <string name="game_validation_wrong_title">This is not the supported Xbox version of NFS Underground 2.</string>
     <string name="game_validation_wrong_entry">The XBE entry point does not match the recompiled game.</string>
     <string name="game_validation_wrong_release">The XBE does not match the recompiled game release.</string>
-    <string name="game_validation_missing_data">Additional game data files are missing.</string>
-    <string name="game_validation_directory_unavailable">The XBE matches, but its game directory could not be verified. Select the original Xbox ISO instead.</string>
+    <string name="game_validation_missing_data">Required game data is missing from the Xbox disc image.</string>
     <string name="game_validation_xbe_too_large">The Xbox executable exceeds the supported size limit.</string>
     <string name="game_validation_read_error">Unable to read the selected game file.</string>
     <string name="game_validation_unknown_error">Unknown game validation error.</string>
 
-    <string name="game_validation_details">Title ID: %1$s\nEntry point: %2$s\nXBE SHA-1: %3$s</string>
+    <string name="game_validation_details">Title ID: %1$s\nEntry point: %2$s\nExecutable SHA-1: %3$s</string>
+    <string name="initialize_graphics">Initialize Graphics</string>
+    <string name="release_graphics">Release Graphics</string>
+    <string name="graphics_initializing">Initializing Vulkan surface...</string>
+    <string name="graphics_surface_ready">Vulkan surface attached successfully. Game execution has not started.</string>
+    <string name="graphics_surface_released">Vulkan surface released.</string>
+    <string name="game_directory_name" translatable="false">Underground2</string>
+    <string name="game_library_scanning">Checking the game directory...</string>
+    <string name="game_library_not_found">No compatible Xbox ISO found in /sdcard/Underground2. Add an ISO or select one manually.</string>
+    <string name="game_library_error">Unable to access the game directory. Check storage permissions and try again.</string>
 </resources>
