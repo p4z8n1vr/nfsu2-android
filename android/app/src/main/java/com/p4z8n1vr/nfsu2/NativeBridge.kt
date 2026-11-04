@@ -35,6 +35,12 @@ object NativeBridge {
         port: Int
     ): Int
 
+    external fun validateGame(
+        descriptor: Int,
+        filename: String,
+        filesystemPath: String?
+    ): GameValidationResult
+
     external fun firstSwapSeen(): Boolean
 
     external fun resetFirstSwap()

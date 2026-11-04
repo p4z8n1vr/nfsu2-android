@@ -25,6 +25,9 @@ public:
     ~Disc();
     // false with the reason when the file is no Xbox disc image
     bool Open(const std::filesystem::path& path, std::string& error);
+#ifndef _WIN32
+    bool OpenFd(int descriptor, std::string& error);
+#endif
     // from the root, any case, ".." steps up; null when missing
     const Entry* Find(const std::vector<std::string>& parts) const;
     const Entry* Find(std::string_view path) const;  // backslash separated

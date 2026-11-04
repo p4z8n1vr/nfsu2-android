@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NFS Underground 2</string>
+
+    <string name="native_initializing">Initializing native runtime...</string>
+    <string name="native_ready">NFS Underground 2 Android\nNative ABI: %1$d\nRenderer standby until game boot.</string>
+    <string name="native_initialization_failed">Native initialization failed:\n%1$s</string>
+    <string name="unsupported_native_abi">Unsupported native ABI: %1$d</string>
+    <string name="data_directory_failed">Failed to configure native data directory</string>
+
+    <string name="surface_attached">JNI: OK\nVulkan surface: attached\nGame boot: not started</string>
+    <string name="surface_initialization_failed">Vulkan surface initialization failed</string>
+    <string name="surface_error">Surface error:\n%1$s</string>
+    <string name="surface_detach_failed">Native surface is still in use.\nRenderer shutdown is required.</string>
+
+    <string name="storage_granted">Storage access: granted</string>
+    <string name="storage_not_granted">Storage access: not granted</string>
+    <string name="grant_storage_access">Grant Full Storage Access</string>
+    <string name="storage_access_granted">Full Storage Access Granted</string>
+    <string name="storage_settings_unavailable">Unable to open storage permission settings.</string>
+    <string name="select_game">Select Game File</string>
+    <string name="selected_game_none">Selected game: None</string>
+    <string name="selected_game_name">Selected game: %1$s</string>
+    <string name="selected_game_type">File type: %1$s</string>
+    <string name="game_type_none">Not selected</string>
+    <string name="game_type_iso">Xbox ISO / XISO</string>
+    <string name="game_type_xbe">Xbox Executable (XBE)</string>
+    <string name="game_type_unknown">Unknown</string>
+    <string name="game_filename_unknown">Unknown filename</string>
+    <string name="game_selection_idle">Choose a game file to continue.</string>
+    <string name="game_selection_pending">File selected. Native validation is pending.</string>
+    <string name="game_selection_cancelled">File selection cancelled.</string>
+    <string name="game_selection_invalid">No valid file was returned by the picker.</string>
+    <string name="game_selection_unsupported">Unsupported file. Select an ISO, XISO or XBE file.</string>
+    <string name="game_selection_scheme_unsupported">The selected file URI is not supported.</string>
+    <string name="game_picker_unavailable">Unable to open the device file picker.</string>
+
+    <string name="game_validation_running">Validating selected game...</string>
+    <string name="game_validation_success">Game validation successful. Boot not started.</string>
+    <string name="game_validation_failed">Validation failed: %1$s</string>
+    <string name="game_validation_io_error">Unable to open or validate the selected file.</string>
+
+    <string name="game_validation_invalid_descriptor">Invalid game file descriptor.</string>
+    <string name="game_validation_non_seekable">The selected file does not support random access.</string>
+    <string name="game_validation_invalid_disc">Invalid or unsupported Xbox ISO/XISO image.</string>
+    <string name="game_validation_missing_xbe">The Xbox disc does not contain default.xbe.</string>
+    <string name="game_validation_invalid_xbe">Invalid Xbox executable.</string>
+    <string name="game_validation_wrong_title">This is not the supported Xbox version of NFS Underground 2.</string>
+    <string name="game_validation_wrong_entry">The XBE entry point does not match the recompiled game.</string>
+    <string name="game_validation_wrong_release">The XBE does not match the recompiled game release.</string>
+    <string name="game_validation_missing_data">Additional game data files are missing.</string>
+    <string name="game_validation_directory_unavailable">The XBE matches, but its game directory could not be verified. Select the original Xbox ISO instead.</string>
+    <string name="game_validation_xbe_too_large">The Xbox executable exceeds the supported size limit.</string>
+    <string name="game_validation_read_error">Unable to read the selected game file.</string>
+    <string name="game_validation_unknown_error">Unknown game validation error.</string>
+
+    <string name="game_validation_details">Title ID: %1$s\nEntry point: %2$s\nXBE SHA-1: %3$s</string>
+</resources>

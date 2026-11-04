@@ -130,3 +130,187 @@ Java_com_p4z8n1vr_nfsu2_NativeBridge_resetFirstSwap(
 }
 
 } // extern "C"
+
+
+#include <array>
+#include <cstdio>
+#include <exception>
+#include <string>
+
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "android_game_validation.h"
+
+namespace {
+
+std::string JavaString(JNIEnv* env, jstring value) {
+    if (!value) return {};
+
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    if (!chars) return {};
+
+    std::string result(chars);
+    env->ReleaseStringUTFChars(value, chars);
+
+    return result;
+}
+
+// Accept only paths that resolve to the same file as the descriptor.
+//
+std::string VerifiedSharedStoragePath(int fd) {
+    struct stat descriptor_stat{};
+
+    if (fd < 0 ||
+        fstat(fd, &descriptor_stat) != 0 ||
+        !S_ISREG(descriptor_stat.st_mode)) {
+        return {};
+    }
+
+    char proc_path[64]{};
+
+    std::snprintf(
+        proc_path,
+        sizeof(proc_path),
+        "/proc/self/fd/%d",
+        fd
+    );
+
+    std::array<char, 4096> target{};
+
+    const ssize_t length = readlink(
+        proc_path,
+        target.data(),
+        target.size() - 1
+    );
+
+    if (length <= 0) return {};
+
+    const std::string path(
+        target.data(),
+        static_cast<size_t>(length)
+    );
+
+    if (!path.starts_with("/storage/") &&
+        !path.starts_with("/mnt/user/") &&
+        !path.starts_with("/mnt/media_rw/")) {
+        return {};
+    }
+
+    struct stat path_stat{};
+
+    if (stat(path.c_str(), &path_stat) != 0 ||
+        descriptor_stat.st_dev != path_stat.st_dev ||
+        descriptor_stat.st_ino != path_stat.st_ino) {
+        return {};
+    }
+
+    return path;
+}
+
+jobject MakeJavaValidation(
+    JNIEnv* env,
+    const android_game::ValidationResult& result
+) {
+    jclass clazz = env->FindClass(
+        "com/p4z8n1vr/nfsu2/GameValidationResult"
+    );
+
+    if (!clazz) return nullptr;
+
+    jmethodID constructor = env->GetMethodID(
+        clazz,
+        "<init>",
+        "(IIJJLjava/lang/String;Ljava/lang/String;)V"
+    );
+
+    if (!constructor) {
+        env->DeleteLocalRef(clazz);
+        return nullptr;
+    }
+
+    jstring sha1 = env->NewStringUTF(
+        result.sha1.c_str()
+    );
+
+    jstring diagnostic = env->NewStringUTF(
+        result.diagnostic.c_str()
+    );
+
+    if (!sha1 || !diagnostic) {
+        if (sha1) env->DeleteLocalRef(sha1);
+        if (diagnostic) env->DeleteLocalRef(diagnostic);
+        env->DeleteLocalRef(clazz);
+        return nullptr;
+    }
+
+    jobject value = env->NewObject(
+        clazz,
+        constructor,
+        static_cast<jint>(result.status),
+        static_cast<jint>(result.type),
+        static_cast<jlong>(result.title_id),
+        static_cast<jlong>(result.entry_point),
+        sha1,
+        diagnostic
+    );
+
+    env->DeleteLocalRef(sha1);
+    env->DeleteLocalRef(diagnostic);
+    env->DeleteLocalRef(clazz);
+
+    return value;
+}
+
+} // namespace
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_p4z8n1vr_nfsu2_NativeBridge_validateGame(
+    JNIEnv* env,
+    jobject,
+    jint descriptor,
+    jstring filename,
+    jstring filesystem_path
+) {
+    const std::string name = JavaString(env, filename);
+
+    if (env->ExceptionCheck()) {
+        return nullptr;
+    }
+
+    std::string direct_path = JavaString(
+        env,
+        filesystem_path
+    );
+
+    if (env->ExceptionCheck()) {
+        return nullptr;
+    }
+
+    if (direct_path.empty()) {
+        direct_path = VerifiedSharedStoragePath(descriptor);
+    }
+
+    android_game::ValidationResult result;
+
+    try {
+        result = android_game::ValidateFile(
+            descriptor,
+            name,
+            direct_path
+        );
+    } catch (const std::exception& exception) {
+        result.status =
+            android_game::ValidationStatus::ReadError;
+
+        result.diagnostic = exception.what();
+    } catch (...) {
+        result.status =
+            android_game::ValidationStatus::ReadError;
+
+        result.diagnostic =
+            "Unknown native validation failure";
+    }
+
+    return MakeJavaValidation(env, result);
+}

@@ -286,3 +286,40 @@ foreach(target IN ITEMS
 )
     target_compile_options(${target} PRIVATE -O2)
 endforeach()
+
+set(NFSU2_SOURCE_XBE
+    "${NFSU2_ROOT}/assets/default.xbe"
+)
+
+if(NOT EXISTS "${NFSU2_SOURCE_XBE}")
+    message(FATAL_ERROR
+        "Missing assets/default.xbe: required for validation fingerprint"
+    )
+endif()
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${NFSU2_SOURCE_XBE}"
+)
+
+file(SHA1 "${NFSU2_SOURCE_XBE}" NFSU2_EXPECTED_XBE_SHA1)
+
+file(WRITE
+    "${CMAKE_CURRENT_BINARY_DIR}/nfsu2_expected_xbe.h"
+    "#pragma once\n"
+    "#define NFSU2_EXPECTED_XBE_SHA1 \"${NFSU2_EXPECTED_XBE_SHA1}\"\n"
+)
+
+target_sources(nfsu2 PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/android_game_validation.cpp"
+)
+
+target_include_directories(nfsu2 PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_BINARY_DIR}"
+    "${NFSU2_RUNTIME_DIR}"
+    "${NFSU2_GENERATED_DIR}"
+)
+
+message(STATUS
+    "NFSU2 validation fingerprint: ${NFSU2_EXPECTED_XBE_SHA1}"
+)

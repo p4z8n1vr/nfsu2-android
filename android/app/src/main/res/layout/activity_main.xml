@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/launcher_background">
+
+    <SurfaceView
+        android:id="@+id/game_surface"
+        android:visibility="gone"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <ScrollView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:fillViewport="false"
+        android:background="@color/status_background">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="@dimen/launcher_padding">
+
+            <TextView
+                android:id="@+id/native_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/native_initializing"
+                android:textColor="@color/status_text"
+                android:textSize="@dimen/status_text_size" />
+
+            <TextView
+                android:id="@+id/storage_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/status_spacing"
+                android:text="@string/storage_not_granted"
+                android:textColor="@color/status_text"
+                android:textSize="@dimen/status_text_size" />
+
+            <Button
+                android:id="@+id/grant_storage_access"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/status_spacing"
+                android:text="@string/grant_storage_access"
+                android:textAllCaps="false" />
+
+            <Button
+                android:id="@+id/select_game_file"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/status_spacing"
+                android:text="@string/select_game"
+                android:textAllCaps="false" />
+
+            <TextView
+                android:id="@+id/selected_game"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/status_spacing"
+                android:text="@string/selected_game_none"
+                android:textColor="@color/status_text"
+                android:textSize="@dimen/status_text_size" />
+
+            <TextView
+                android:id="@+id/selected_game_type"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/game_type_none"
+                android:textColor="@color/status_text"
+                android:textSize="@dimen/status_text_size" />
+
+            <TextView
+                android:id="@+id/selected_game_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/status_spacing"
+                android:text="@string/game_selection_idle"
+                android:textColor="@color/status_text"
+                android:textSize="@dimen/status_text_size" />
+
+            <TextView
+                android:id="@+id/game_validation_details"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/status_spacing"
+                android:textColor="@color/status_text"
+                android:textSize="@dimen/status_text_size"
+                android:visibility="gone" />
+
+        </LinearLayout>
+
+    </ScrollView>
+
+</FrameLayout>

@@ -185,3 +185,67 @@ void MountDisc(std::unique_ptr<Disc> disc) { g_mounted = std::move(disc); }
 const Disc* MountedDisc() { return g_mounted.get(); }
 
 }  // namespace kernel
+
+#ifndef _WIN32
+namespace kernel {
+
+bool Disc::OpenFd(int descriptor, std::string& error) {
+    if (descriptor < 0 || file_ != -1) {
+        error = "Invalid descriptor or disc already open";
+        return false;
+    }
+
+    const int owned = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
+    if (owned < 0) {
+        error = "Unable to duplicate the file descriptor";
+        return false;
+    }
+
+    file_ = owned;
+    path_.clear();
+    base_ = 0;
+    time_ = 0;
+    root_ = {};
+
+    for (uint64_t base : kPartitions) {
+        uint8_t volume[kSector]{};
+
+        if (ReadAt(base + kVolume, volume, kSector) != kSector)
+            continue;
+
+        if (std::memcmp(volume, kMagic, kMagicSize) != 0 ||
+            std::memcmp(volume + 0x7EC, kMagic, kMagicSize) != 0)
+            continue;
+
+        base_ = base;
+
+        uint32_t sector = 0;
+        uint32_t size = 0;
+
+        std::memcpy(&sector, volume + 0x14, sizeof(sector));
+        std::memcpy(&size, volume + 0x18, sizeof(size));
+        std::memcpy(&time_, volume + 0x1C, sizeof(time_));
+
+        root_ = {
+            {},
+            base + uint64_t(sector) * kSector,
+            size,
+            true,
+            {}
+        };
+
+        if (!ReadDir(root_, 0)) {
+            error = "Unable to read Xbox filesystem";
+            root_ = {};
+            return false;
+        }
+
+        return true;
+    }
+
+    error = "No supported Xbox disc filesystem found";
+    return false;
+}
+
+} // namespace kernel
+#endif

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="launcher_padding">16dp</dimen>
+    <dimen name="status_spacing">12dp</dimen>
+    <dimen name="status_text_size">14sp</dimen>
+</resources>
