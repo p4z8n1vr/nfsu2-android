@@ -226,16 +226,16 @@ set_target_properties(nfsu2_android_host PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-# Android native linking validation
-add_library(nfsu2_link_probe SHARED
-    "${CMAKE_CURRENT_LIST_DIR}/link_probe.cpp"
+# Android native game runtime and JNI
+add_library(nfsu2 SHARED
+    "${CMAKE_CURRENT_LIST_DIR}/android_jni.cpp"
 )
 
-target_compile_features(nfsu2_link_probe PRIVATE cxx_std_23)
+target_compile_features(nfsu2 PRIVATE cxx_std_23)
 
 # Require every symbol to be resolved.
 # Do not allow the linker to silently skip unused archive objects.
-target_link_libraries(nfsu2_link_probe PRIVATE
+target_link_libraries(nfsu2 PRIVATE
     "-Wl,--whole-archive"
 
     nfsu2_recompiled
@@ -255,7 +255,7 @@ target_link_libraries(nfsu2_link_probe PRIVATE
     m
 )
 
-target_link_options(nfsu2_link_probe PRIVATE
+target_link_options(nfsu2 PRIVATE
     -fuse-ld=lld
     "LINKER:--no-undefined"
     "LINKER:--error-limit=0"
@@ -268,6 +268,6 @@ target_sources(nfsu2_android_host PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/android_lifecycle.cpp"
 )
 
-target_link_libraries(nfsu2_link_probe PRIVATE
+target_link_libraries(nfsu2 PRIVATE
     aaudio
 )

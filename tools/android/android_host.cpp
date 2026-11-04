@@ -282,3 +282,32 @@ bool nfsu2_android_attach_window(ANativeWindow* window) {
 
     return true;
 }
+
+extern "C" __attribute__((visibility("default")))
+bool nfsu2_android_detach_window() {
+    std::lock_guard lock(g_platform_lock);
+
+    if (!g_window) return true;
+
+    // Do not destroy a surface owned by an active renderer.
+    // The full renderer shutdown path will be implemented
+    // before Android game boot is enabled.
+    if (gpu::GetVulkanHandles().device != VK_NULL_HANDLE)
+        return false;
+
+    VkInstance instance = gpu::VulkanInstance();
+    VkSurfaceKHR surface = gpu::VulkanSurface();
+
+    if (instance == VK_NULL_HANDLE)
+        return false;
+
+    if (surface != VK_NULL_HANDLE)
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+
+    gpu::SetVulkanSurface(instance, VK_NULL_HANDLE);
+
+    ANativeWindow_release(g_window);
+    g_window = nullptr;
+
+    return true;
+}
