@@ -493,7 +493,6 @@ private:
     uint64_t fpsN_ = 0;
     VkPerfClock::time_point perfT_ = VkPerfClock::now();
     uint64_t perfFrames_ = 0;
-    uint64_t presentLogged_ = 0;
     bool destroyed_ = false;
 };
 }  // namespace
@@ -531,12 +530,12 @@ VkInstance VulkanInstance() {
         if (haveDebug) add(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         else LOGW("vulkan: XBE_VK_DEBUG set but VK_EXT_debug_utils is not available");
     }
-    VkApplicationInfo appInfo{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    VkApplicationInfo appInfo{}; appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "xbe-recomp"; appInfo.apiVersion = VK_API_VERSION_1_2;
-    VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    VkInstanceCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ci.pApplicationInfo = &appInfo; ci.enabledExtensionCount = uint32_t(exts.size()); ci.ppEnabledExtensionNames = exts.data();
     ci.enabledLayerCount = uint32_t(layers.size()); ci.ppEnabledLayerNames = layers.data();
-    VkDebugUtilsMessengerCreateInfoEXT msgCi{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    VkDebugUtilsMessengerCreateInfoEXT msgCi{}; msgCi.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     if (VkDebugEnabled() && !layers.empty()) {
         msgCi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         msgCi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
@@ -577,7 +576,7 @@ uint32_t VulkanBackend::FindHostMemory(uint32_t typeBits, bool& coherent) const 
     return FindMemory(typeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 }
 VkImageView VulkanBackend::MakeView(VkImage image, VkFormat fmt, VkImageViewType type, VkImageAspectFlags aspect, uint32_t levels, uint32_t layers) {
-    VkImageViewCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    VkImageViewCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     ci.image = image; ci.viewType = type; ci.format = fmt;
     ci.subresourceRange.aspectMask = aspect; ci.subresourceRange.levelCount = levels; ci.subresourceRange.layerCount = layers;
     VkImageView view = VK_NULL_HANDLE; vkCreateImageView(device_, &ci, nullptr, &view); return view;
@@ -585,14 +584,14 @@ VkImageView VulkanBackend::MakeView(VkImage image, VkFormat fmt, VkImageViewType
 ImageRes VulkanBackend::CreateImage(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect,
                                     uint32_t layers, VkImageType type, uint32_t mips) {
     ImageRes r; r.format = fmt; r.w = std::max(w, 1u); r.h = std::max(h, 1u); r.layers = layers;
-    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    VkImageCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ci.imageType = type; ci.format = fmt; ci.extent = {r.w, r.h, type == VK_IMAGE_TYPE_3D ? layers : 1};
     ci.mipLevels = mips; ci.arrayLayers = type == VK_IMAGE_TYPE_3D ? 1 : layers; ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL; ci.usage = usage; ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (layers == 6 && type == VK_IMAGE_TYPE_2D) ci.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     if (vkCreateImage(device_, &ci, nullptr, &r.image) != VK_SUCCESS) return r;
     VkMemoryRequirements mr; vkGetImageMemoryRequirements(device_, r.image, &mr);
-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    VkMemoryAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = mr.size; ai.memoryTypeIndex = FindMemory(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     // D6: bail cleanly (destroying the partial image) when no type fits, allocation
     // fails, or the bind fails, instead of handing out an image bound to nothing.
@@ -620,7 +619,7 @@ void VulkanBackend::DestroyImage(ImageRes& r) {
 void VulkanBackend::DeferDestroyImage(ImageRes r) { if (r.image) Cur().garbage.push_back([this, r]() mutable { DestroyImage(r); }); }
 void VulkanBackend::TransitionRaw(VkImage image, VkImageLayout& cur, VkImageLayout want, VkImageAspectFlags aspect) {
     if (cur == want) return;
-    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    VkImageMemoryBarrier b{}; b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     b.oldLayout = cur; b.newLayout = want; b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = image; b.subresourceRange.aspectMask = aspect;
     b.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS; b.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
@@ -670,7 +669,7 @@ VkRenderPass VulkanBackend::RenderPassFor(VkFormat color, VkFormat depth, bool h
     dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dep.dstStageMask = dep.srcStageMask;
     dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    VkRenderPassCreateInfo ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    VkRenderPassCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     ci.attachmentCount = n; ci.pAttachments = at; ci.subpassCount = 1; ci.pSubpasses = &sub; ci.dependencyCount = 1; ci.pDependencies = &dep;
     VkRenderPass rp = VK_NULL_HANDLE; vkCreateRenderPass(device_, &ci, nullptr, &rp); passes_[key] = rp; return rp;
 }
@@ -679,7 +678,7 @@ void VulkanBackend::EnsureRecording() {
     Frame& f = Cur();
     if (f.fencePending) WaitFrame(f);
     vkResetCommandBuffer(f.cmd, 0); vkResetDescriptorPool(device_, f.pool, 0); f.used = 0; f.sets = 0; f.gen = ++segmentGen_; f.uploadFlushMems.clear();
-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VkCommandBufferBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(f.cmd, &bi); recording_ = true;
 }
 // An allocation is only valid in the segment that will record its use: it must be
@@ -737,17 +736,17 @@ void VulkanBackend::Submit(bool wait, VkSemaphore waitSem, VkSemaphore signalSem
     }
     // D6: non-coherent upload memory must be flushed before the queue reads it.
     if (!f.uploadCoherent && f.uploadMem) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        VkMappedMemoryRange range{}; range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
         range.memory = f.uploadMem; range.offset = 0; range.size = VK_WHOLE_SIZE;
         vkFlushMappedMemoryRanges(device_, 1, &range);
     }
     for (VkDeviceMemory mem : f.uploadFlushMems) {
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        VkMappedMemoryRange range{}; range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
         range.memory = mem; range.offset = 0; range.size = VK_WHOLE_SIZE;
         vkFlushMappedMemoryRanges(device_, 1, &range);
     }
     VkPipelineStageFlags stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1; si.pCommandBuffers = &f.cmd;
     if (waitSem) { si.waitSemaphoreCount = 1; si.pWaitSemaphores = &waitSem; si.pWaitDstStageMask = &stage; }
     if (signalSem) { si.signalSemaphoreCount = 1; si.pSignalSemaphores = &signalSem; }
@@ -773,12 +772,12 @@ VulkanBackend::Alloc VulkanBackend::UploadAlloc(uint64_t size, uint64_t align) {
     if (o + size <= kUploadSize) { f.used = o + size; g_vkPerf.upload += size; return {f.upload, o, f.map + o}; }
     g_vkPerf.overflow++;
     VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE;
-    VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    VkBufferCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     ci.size = std::max<uint64_t>(size, 1);
     ci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     if (vkCreateBuffer(device_, &ci, nullptr, &buf) != VK_SUCCESS) return {};
     VkMemoryRequirements mr; vkGetBufferMemoryRequirements(device_, buf, &mr);
-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    VkMemoryAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     // D6: no suitable host memory, a failed allocate/bind, or a failed map hands out
     // nothing (callers already drop the draw on a null cpu) instead of arithmetic on null.
     bool coherent = true;
@@ -804,33 +803,33 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
         b[0].descriptorType = b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         for (int i = 2; i < 6; i++) b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         for (int i = 6; i < 10; i++) b[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        VkDescriptorSetLayoutCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         ci.bindingCount = 10; ci.pBindings = b;
         vkCreateDescriptorSetLayout(device_, &ci, nullptr, &setLayout_);
-        VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        VkPipelineLayoutCreateInfo li{}; li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         li.setLayoutCount = 1; li.pSetLayouts = &setLayout_;
         vkCreatePipelineLayout(device_, &li, nullptr, &pipelineLayout_);
     }
     {
-        VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        VkCommandPoolCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; ci.queueFamilyIndex = qfamily_;
         vkCreateCommandPool(device_, &ci, nullptr, &pool_);
-        VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        VkSemaphoreCreateInfo si{}; si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         for (auto& f : frames_) {
-            VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            VkCommandBufferAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             ai.commandPool = pool_; ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandBufferCount = 1;
             vkAllocateCommandBuffers(device_, &ai, &f.cmd);
-            VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            VkFenceCreateInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO; fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
             vkCreateFence(device_, &fi, nullptr, &f.fence);
             vkCreateSemaphore(device_, &si, nullptr, &f.imageAvailable);
             vkCreateSemaphore(device_, &si, nullptr, &f.renderFinished);
             // kSetsPerSegment sets of the one layout (2 uniform + 4 combined + 4
             // sampler descriptors each), so the set count is the only limit
             VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * kSetsPerSegment}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * kSetsPerSegment}, {VK_DESCRIPTOR_TYPE_SAMPLER, 4 * kSetsPerSegment}};
-            VkDescriptorPoolCreateInfo di{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            VkDescriptorPoolCreateInfo di{}; di.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             di.maxSets = kSetsPerSegment; di.poolSizeCount = 3; di.pPoolSizes = sizes;
             vkCreateDescriptorPool(device_, &di, nullptr, &f.pool);
-            VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            VkBufferCreateInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             bi.size = kUploadSize;
             bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
             // D6: a ring that cannot be created, allocated, bound or mapped fails Init
@@ -842,7 +841,7 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
                 return false;
             }
             VkMemoryRequirements mr; vkGetBufferMemoryRequirements(device_, f.upload, &mr);
-            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            VkMemoryAllocateInfo mai{}; mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             mai.allocationSize = mr.size; mai.memoryTypeIndex = FindHostMemory(mr.memoryTypeBits, f.uploadCoherent);
             if (mai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(device_, &mai, nullptr, &f.uploadMem) != VK_SUCCESS) {
                 LOGE("vulkan: upload ring allocation failed (no host-visible memory type or out of memory); Init fails (D6)");
@@ -865,7 +864,7 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}; VkClearColorValue black{};
         vkCmdClearColorImage(Cmd(), nullImage_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
         Transition(nullImage_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+        VkSamplerCreateInfo si{}; si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO; si.magFilter = si.minFilter = VK_FILTER_NEAREST;
         vkCreateSampler(device_, &si, nullptr, &nullSampler_);
     }
     lut_ = CreateImage(256, 1, kBgra, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -886,12 +885,12 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
             std::streamsize n = f.tellg();
             if (n > 0) { blob.resize(size_t(n)); f.seekg(0); f.read(reinterpret_cast<char*>(blob.data()), n); }
         }
-        VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+        VkPipelineCacheCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
         ci.initialDataSize = blob.size(); ci.pInitialData = blob.data();
         if (vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_) != VK_SUCCESS) pipelineCache_ = VK_NULL_HANDLE;
         LOGR("Vulkan adapter: %s (vendor %04x device %04x, driver %u)", props.deviceName, props.vendorID, props.deviceID, props.driverVersion);
         VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1024}};
-        VkDescriptorPoolCreateInfo di{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        VkDescriptorPoolCreateInfo di{}; di.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         di.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT; di.maxSets = 1024; di.poolSizeCount = 2; di.pPoolSizes = ps;
         vkCreateDescriptorPool(device_, &di, nullptr, &imguiPool_);
         g_handles.instance = instance_; g_handles.physicalDevice = physical_; g_handles.device = device_;
@@ -929,10 +928,10 @@ bool VulkanBackend::CreateDeviceAndSwap() {
     std::vector<const char*> exts;
     if (surface_) exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     float prio = 1.0f;
-    VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    VkDeviceQueueCreateInfo qi{}; qi.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     qi.queueFamilyIndex = qfamily_; qi.queueCount = 1; qi.pQueuePriorities = &prio;
     VkPhysicalDeviceFeatures want{}; want.samplerAnisotropy = anisotropy_; want.fillModeNonSolid = fillNonSolid_; want.textureCompressionBC = bc_; want.depthClamp = feats.depthClamp;
-    VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    VkDeviceCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     ci.queueCreateInfoCount = 1; ci.pQueueCreateInfos = &qi; ci.enabledExtensionCount = uint32_t(exts.size()); ci.ppEnabledExtensionNames = exts.data(); ci.pEnabledFeatures = &want;
     if (vkCreateDevice(physical_, &ci, nullptr, &device_) != VK_SUCCESS) { LOGE("vulkan: vkCreateDevice failed"); return false; }
     vkGetDeviceQueue(device_, qfamily_, 0, &queue_);
@@ -945,7 +944,7 @@ bool VulkanBackend::CreateDeviceAndSwap() {
     swapPass_ = RenderPassFor(swapFormat_, VK_FORMAT_UNDEFINED, true, false);
     // headless: the swap pass above loads; the offscreen present still works, nothing is shown
     offscreen_ = CreateImage(bbW_, bbH_, swapFormat_, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    VkFramebufferCreateInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fi.renderPass = swapPass_; fi.attachmentCount = 1; fi.pAttachments = &offscreen_.view; fi.width = bbW_; fi.height = bbH_; fi.layers = 1;
     vkCreateFramebuffer(device_, &fi, nullptr, &offscreenFb_);
     return true;
@@ -972,7 +971,7 @@ bool VulkanBackend::CreateSwapchain() {
     if (!swapVsync_) { for (auto m : modes) if (m == VK_PRESENT_MODE_MAILBOX_KHR) mode = m; for (auto m : modes) if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) mode = m; }
     uint32_t imageCount = std::max<uint32_t>(kFrames, caps.minImageCount);
     if (caps.maxImageCount) imageCount = std::min(imageCount, caps.maxImageCount);
-    VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    VkSwapchainCreateInfoKHR ci{}; ci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     ci.surface = surface_; ci.minImageCount = imageCount; ci.imageFormat = chosen.format; ci.imageColorSpace = chosen.colorSpace;
     ci.imageExtent = swapExtent_; ci.imageArrayLayers = 1; ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; ci.preTransform = caps.currentTransform;
@@ -997,7 +996,7 @@ bool VulkanBackend::CreateSwapchain() {
         deps[1].srcSubpass = 0; deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
         deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; deps[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
         deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; deps[1].dstAccessMask = 0;
-        VkRenderPassCreateInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        VkRenderPassCreateInfo ri{}; ri.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         ri.attachmentCount = 1; ri.pAttachments = &at; ri.subpassCount = 1; ri.pSubpasses = &sub;
         ri.dependencyCount = 2; ri.pDependencies = deps;
         vkCreateRenderPass(device_, &ri, nullptr, &swapPass_);
@@ -1005,7 +1004,7 @@ bool VulkanBackend::CreateSwapchain() {
     swapViews_.assign(n, VK_NULL_HANDLE); swapFbs_.assign(n, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < n; i++) {
         swapViews_[i] = MakeView(swapImages_[i], swapFormat_, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, 1);
-        VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        VkFramebufferCreateInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         fi.renderPass = swapPass_; fi.attachmentCount = 1; fi.pAttachments = &swapViews_[i]; fi.width = swapExtent_.width; fi.height = swapExtent_.height; fi.layers = 1;
         vkCreateFramebuffer(device_, &fi, nullptr, &swapFbs_[i]);
     }
@@ -1128,7 +1127,7 @@ VkShaderModule VulkanBackend::CompileModule(const std::string& src, const char* 
     if (failedModules_.count(hash)) return VK_NULL_HANDLE;  // D4: known HLSL compile failure this run
     std::vector<uint32_t> words; std::string error; VkShaderModule mod = VK_NULL_HANDLE;
     if (CompileHlslToSpirv(src, entry, fragment, words, &error) && !words.empty()) {
-        VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        VkShaderModuleCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         ci.codeSize = words.size() * 4; ci.pCode = words.data();
         // D4: a failed create (e.g. SPIR-V from a truncated cache file that passed the
         // old magic-only check) is logged with the shader hash, the on-disk cache entry
@@ -1198,19 +1197,19 @@ VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkS
     // this draw is assembled (EnsurePipeline is called mid-Draw). Two draws sharing a key but
     // not strides would share the first pipeline - the noted approximation of this backend.
     for (uint32_t b = 0; b < asm_.buffer_count && nb < 16; b++) if (used[b]) { binds[nb].binding = b; binds[nb].stride = asm_.buffers[b].stride; binds[nb].inputRate = VK_VERTEX_INPUT_RATE_VERTEX; nb++; }
-    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineVertexInputStateCreateInfo vi{}; vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount = nb; vi.pVertexBindingDescriptions = binds; vi.vertexAttributeDescriptionCount = na; vi.pVertexAttributeDescriptions = attrs;
-    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia{}; ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     ia.topology = k.topo == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST : k.topo == 1 ? (k.strip ? VK_PRIMITIVE_TOPOLOGY_LINE_STRIP : VK_PRIMITIVE_TOPOLOGY_LINE_LIST) : (k.strip ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; vp.viewportCount = 1; vp.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    VkPipelineViewportStateCreateInfo vp{}; vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO; vp.viewportCount = 1; vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo rs{}; rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rs.polygonMode = (k.fill == 0x1B01 && fillNonSolid_) ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
     rs.cullMode = k.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     rs.frontFace = k.ccw ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE; rs.lineWidth = 1.0f;
     rs.depthClampEnable = VK_FALSE;
     if (k.zbias || k.zslope != 0) { rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = float(k.zbias) / 16777215.0f; rs.depthBiasSlopeFactor = k.zslope; }
-    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    VkPipelineMultisampleStateCreateInfo ms{}; ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO; ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo dss{}; dss.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     dss.depthTestEnable = k.zen; dss.depthWriteEnable = k.zwrite; dss.depthCompareOp = CmpOp(k.zfunc); dss.stencilTestEnable = k.sten;
     VkStencilOpState sop{}; sop.failOp = StencilOpVk(k.sfail); sop.depthFailOp = StencilOpVk(k.szfail); sop.passOp = StencilOpVk(k.spass);
     sop.compareOp = CmpOp(k.sfunc); sop.compareMask = k.smask; sop.writeMask = k.swmask; sop.reference = k.sref;
@@ -1219,16 +1218,16 @@ VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkS
     cb.blendEnable = k.blend; cb.srcColorBlendFactor = BlendFactor(k.src, false); cb.dstColorBlendFactor = BlendFactor(k.dst, false);
     cb.colorBlendOp = BlendOpVk(k.op); cb.srcAlphaBlendFactor = BlendFactor(k.src, true); cb.dstAlphaBlendFactor = BlendFactor(k.dst, true);
     cb.alphaBlendOp = BlendOpVk(k.op); cb.colorWriteMask = VkColorComponentFlags(k.wmask & 0xF);
-    VkPipelineColorBlendStateCreateInfo cbs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    VkPipelineColorBlendStateCreateInfo cbs{}; cbs.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     cbs.attachmentCount = k.has_rt ? 1 : 0; cbs.pAttachments = &cb;
     cbs.blendConstants[0] = cbs.blendConstants[1] = cbs.blendConstants[2] = cbs.blendConstants[3] = 0;
     VkDynamicState dyn[3] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS};
-    VkPipelineDynamicStateCreateInfo dyns{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dyns.dynamicStateCount = 3; dyns.pDynamicStates = dyn;
+    VkPipelineDynamicStateCreateInfo dyns{}; dyns.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO; dyns.dynamicStateCount = 3; dyns.pDynamicStates = dyn;
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vs; stages[0].pName = "main";
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = ps; stages[1].pName = "main";
-    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    VkGraphicsPipelineCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     ci.stageCount = 2; ci.pStages = stages; ci.pVertexInputState = &vi; ci.pInputAssemblyState = &ia; ci.pViewportState = &vp;
     ci.pRasterizationState = &rs; ci.pMultisampleState = &ms; ci.pDepthStencilState = &dss; ci.pColorBlendState = &cbs;
     ci.pDynamicState = &dyns; ci.layout = pipelineLayout_;
@@ -1246,24 +1245,24 @@ VkPipeline VulkanBackend::EnsureBlitPipeline(VkFormat rtv, bool over, bool depth
     VkShaderModule ps = CompileModule(depthWrite ? kDepthHlsl : kBlitHlsl, "psmain", true, h);
     VkPipeline pipe = VK_NULL_HANDLE;
     if (vs && ps) {
-        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO}; ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; vp.viewportCount = 1; vp.scissorCount = 1;
-        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        VkPipelineVertexInputStateCreateInfo vi{}; vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{}; ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO; ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{}; vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO; vp.viewportCount = 1; vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo rs{}; rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE; rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
-        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        VkPipelineMultisampleStateCreateInfo ms{}; ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO; ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo dss{}; dss.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         if (depthWrite) { dss.depthTestEnable = VK_TRUE; dss.depthWriteEnable = VK_TRUE; dss.depthCompareOp = VK_COMPARE_OP_ALWAYS; }
         VkPipelineColorBlendAttachmentState cb{}; cb.colorWriteMask = 0xF;
         if (over) { cb.blendEnable = VK_TRUE; cb.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; cb.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA; cb.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO; cb.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE; }
-        VkPipelineColorBlendStateCreateInfo cbs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; cbs.attachmentCount = depthWrite ? 0 : 1; cbs.pAttachments = &cb;
+        VkPipelineColorBlendStateCreateInfo cbs{}; cbs.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO; cbs.attachmentCount = depthWrite ? 0 : 1; cbs.pAttachments = &cb;
         VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dyns{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dyns.dynamicStateCount = 2; dyns.pDynamicStates = dyn;
+        VkPipelineDynamicStateCreateInfo dyns{}; dyns.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO; dyns.dynamicStateCount = 2; dyns.pDynamicStates = dyn;
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType = stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vs; stages[0].pName = "vs";
         stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = ps; stages[1].pName = "psmain";
-        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        VkGraphicsPipelineCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         ci.stageCount = 2; ci.pStages = stages; ci.pVertexInputState = &vi; ci.pInputAssemblyState = &ia; ci.pViewportState = &vp;
         ci.pRasterizationState = &rs; ci.pMultisampleState = &ms; ci.pDepthStencilState = &dss; ci.pColorBlendState = &cbs;
         ci.pDynamicState = &dyns; ci.layout = pipelineLayout_;
@@ -1386,7 +1385,7 @@ bool VulkanBackend::BindStageTextures(const State& s, DrawTextures& stages) {
 VkSampler VulkanBackend::StageSamplerFor(const State& s, int i, const DrawTextures& stages, bool clampCoords) {
     const auto& t = s.tss[size_t(i)];
     auto lin = [](uint32_t f) { return f >= 2; };
-    VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    VkSamplerCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     ci.magFilter = lin(t[kTssMagFilter]) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     ci.minFilter = lin(t[kTssMinFilter]) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     ci.mipmapMode = t[kTssMipFilter] == 2 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -1523,7 +1522,7 @@ bool UnitTexcoordsOf(const Assembled& a) {
 }
 VkDescriptorSet VulkanBackend::AllocDrawSet(VkBuffer vcBuf, uint64_t vcOff, VkBuffer dcBuf, uint64_t dcOff, const DrawTextures& stages, const std::array<VkSampler, 4>& samplers) {
     VkDescriptorSet set = VK_NULL_HANDLE;
-    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    VkDescriptorSetAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     EnsureRecording(); CheckAllocGeneration("descriptor set");  // as UploadAlloc: the set must come from the open segment's pool
     ai.descriptorPool = Cur().pool; ai.descriptorSetCount = 1; ai.pSetLayouts = &setLayout_;
     VkResult ar = vkAllocateDescriptorSets(device_, &ai, &set);
@@ -1548,11 +1547,11 @@ void VulkanBackend::BeginTargetPass(Target* rt, Target* ds, VkFramebuffer& fbOut
     if (rt) views[n++] = rt->res.view;
     if (ds) views[n++] = ds->res.view;
     uint32_t w = rt ? rt->res.w : ds->res.w, h = rt ? rt->res.h : ds->res.h;
-    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    VkFramebufferCreateInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fi.renderPass = rp; fi.attachmentCount = n; fi.pAttachments = views; fi.width = w; fi.height = h; fi.layers = 1;
     fbOut = VK_NULL_HANDLE; vkCreateFramebuffer(device_, &fi, nullptr, &fbOut);
     Cur().garbage.push_back([this, fb = fbOut] { if (fb) vkDestroyFramebuffer(device_, fb, nullptr); });
-    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    VkRenderPassBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     bi.renderPass = rp; bi.framebuffer = fbOut; bi.renderArea = {{0, 0}, {w, h}};
     vkCmdBeginRenderPass(Cmd(), &bi, VK_SUBPASS_CONTENTS_INLINE);
 }
@@ -1935,7 +1934,7 @@ void VulkanBackend::BlitToImage(VkFormat rtvFormat, uint32_t w, uint32_t h, Imag
     VkPipeline pipe = EnsureBlitPipeline(rtvFormat, over, false, swap); if (!pipe) return;
     DrawTextures stages; stages.view[0] = src.SampleView(); stages.view[1] = lut_.SampleView();
     std::array<VkSampler, 4> samplers{nullSampler_, nullSampler_, nullSampler_, nullSampler_};
-    { VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; si.magFilter = si.minFilter = VK_FILTER_LINEAR; si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; si.maxLod = VK_LOD_CLAMP_NONE; samplers[0] = GetSampler(si);
+    { VkSamplerCreateInfo si{}; si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO; si.magFilter = si.minFilter = VK_FILTER_LINEAR; si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; si.maxLod = VK_LOD_CLAMP_NONE; samplers[0] = GetSampler(si);
       si.magFilter = si.minFilter = VK_FILTER_NEAREST; si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST; samplers[1] = GetSampler(si); }
     Alloc cb = UploadAlloc(256, 256); if (!cb.cpu) return;
     float cc[8] = {uv[0], uv[1], uv[2], uv[3], gamma ? 1.0f : 0, alpha ? 1.0f : 0, float(taps), mul};
@@ -1966,12 +1965,12 @@ ImageRes VulkanBackend::ShrinkImage(ImageRes& src, uint32_t w, uint32_t h, uint3
 bool VulkanBackend::ReadBackImage(ImageRes& src, uint32_t w, uint32_t h, std::vector<uint8_t>& out) {
     Transition(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkBuffer buf = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE;
-    VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; ci.size = uint64_t(w) * h * 4; ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VkBufferCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; ci.size = uint64_t(w) * h * 4; ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     // D6: every step is checked; a failure returns false with nothing mapped, instead
     // of memcpy'ing from a null map of memory bound through a guessed type 0.
     if (vkCreateBuffer(device_, &ci, nullptr, &buf) != VK_SUCCESS) return false;
     VkMemoryRequirements mr; vkGetBufferMemoryRequirements(device_, buf, &mr);
-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; ai.allocationSize = mr.size;
+    VkMemoryAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; ai.allocationSize = mr.size;
     bool coherent = true;
     ai.memoryTypeIndex = FindHostMemory(mr.memoryTypeBits, coherent);
     if (ai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(device_, &ai, nullptr, &mem) != VK_SUCCESS) { vkDestroyBuffer(device_, buf, nullptr); return false; }
@@ -1982,7 +1981,7 @@ bool VulkanBackend::ReadBackImage(ImageRes& src, uint32_t w, uint32_t h, std::ve
     void* p = nullptr;
     if (vkMapMemory(device_, mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS || !p) { vkDestroyBuffer(device_, buf, nullptr); vkFreeMemory(device_, mem, nullptr); return false; }
     if (!coherent) {  // D6: HOST_VISIBLE-only memory needs an invalidate before the CPU read
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        VkMappedMemoryRange range{}; range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
         range.memory = mem; range.offset = 0; range.size = VK_WHOLE_SIZE;
         if (vkInvalidateMappedMemoryRanges(device_, 1, &range) != VK_SUCCESS) { vkUnmapMemory(device_, mem); vkDestroyBuffer(device_, buf, nullptr); vkFreeMemory(device_, mem, nullptr); return false; }
     }
@@ -2273,7 +2272,7 @@ void VulkanBackend::Present(const Surface& front) {
     if (t) PrepareBlitSource(t->res, gamma_);
     EnsureRecording();
     VkFramebuffer fb = haveSwap ? swapFbs_[imageIndex] : offscreenFb_;
-    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    VkRenderPassBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     bi.renderPass = swapPass_; bi.framebuffer = fb; bi.renderArea = {{0, 0}, {bbW_, bbH_}};
     VkClearValue clear{}; clear.color.float32[3] = 1; bi.clearValueCount = 1; bi.pClearValues = &clear;
     vkCmdBeginRenderPass(Cmd(), &bi, VK_SUBPASS_CONTENTS_INLINE);
@@ -2283,7 +2282,7 @@ void VulkanBackend::Present(const Surface& front) {
     vkCmdEndRenderPass(Cmd());
     Submit(false, waitSem, haveSwap ? Cur().renderFinished : VK_NULL_HANDLE);
     if (haveSwap) {
-        VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+        VkPresentInfoKHR pi{}; pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &Cur().renderFinished; pi.swapchainCount = 1; pi.pSwapchains = &swapchain_; pi.pImageIndices = &imageIndex;
         VkResult r = vkQueuePresentKHR(queue_, &pi);
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) swapStale_ = true;
@@ -2393,7 +2392,7 @@ bool VulkanBackend::DeliverLate(uint32_t data, uint32_t size) {
     if (l.fence[best] > l.delivered && l.rb[best]) {
         void* p = nullptr; if (vkMapMemory(device_, l.rbm[best], 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS || !p) return false;
         if (!l.rbCoherent[best]) {  // D6: invalidate HOST_VISIBLE-only memory before reading it
-            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+            VkMappedMemoryRange range{}; range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
             range.memory = l.rbm[best]; range.offset = 0; range.size = VK_WHOLE_SIZE;
             if (vkInvalidateMappedMemoryRanges(device_, 1, &range) != VK_SUCCESS) { vkUnmapMemory(device_, l.rbm[best]); return false; }
         }
@@ -2425,10 +2424,10 @@ void VulkanBackend::RecordLate(uint32_t data) {
     }
     ImageRes src = PrepareCopySource(t, &l.down); if (!src.Valid()) return;
     if (!l.rb[slot]) {
-        VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; ci.size = uint64_t(l.gw) * l.gh * 4; ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VkBufferCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; ci.size = uint64_t(l.gw) * l.gh * 4; ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         if (vkCreateBuffer(device_, &ci, nullptr, &l.rb[slot]) != VK_SUCCESS) return;
         VkMemoryRequirements mr; vkGetBufferMemoryRequirements(device_, l.rb[slot], &mr);
-        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; ai.allocationSize = mr.size;
+        VkMemoryAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; ai.allocationSize = mr.size;
         // D6: sentinel/allocate/bind failures destroy the partial buffer and record
         // nothing, instead of binding through a guessed type 0.
         ai.memoryTypeIndex = FindHostMemory(mr.memoryTypeBits, l.rbCoherent[slot]);

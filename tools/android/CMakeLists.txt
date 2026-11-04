@@ -271,3 +271,18 @@ target_sources(nfsu2_android_host PRIVATE
 target_link_libraries(nfsu2 PRIVATE
     aaudio
 )
+
+# NFSU2_ANDROID_OPTIMIZATION
+# Keep Android native compilation at -O2 for all variants.
+foreach(target IN ITEMS
+    nfsu2_recompiled
+    nfsu2_runtime_core
+    nfsu2_xdk_base
+    nfsu2_xdk_graphics
+    nfsu2_xdk_audio
+    nfsu2_vulkan_backend
+    nfsu2_android_host
+    nfsu2
+)
+    target_compile_options(${target} PRIVATE -O2)
+endforeach()

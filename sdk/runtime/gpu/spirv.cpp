@@ -241,7 +241,7 @@ void SetSpirvCacheDir(std::filesystem::path dir, std::string device_key) {
     std::lock_guard lock(g_lock);
     // a folder name, nothing else: keep the characters a path is happy with
     for (char& c : device_key)
-        if (!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_'))
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_'))
             c = '_';
     g_dir = dir / device_key;
 }

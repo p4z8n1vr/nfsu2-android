@@ -68,3 +68,8 @@ xboxrecomp/tools/*/output/
 /generated/
 /out/
 /assets/
+
+/android/.gradle/
+/android/.kotlin/
+/android/app/.cxx/
+/android/local.properties

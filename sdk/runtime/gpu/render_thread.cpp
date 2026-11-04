@@ -169,7 +169,8 @@ public:
         PerfTimer perf;  // the capture leaf and its state part start together
         SendState(s);
         perf.Add(g_perf_sendstate_ns);
-        Cmd c{Op::Draw};
+        Cmd c{};
+        c.op = Op::Draw;
         c.a = prim;
         c.b = start;
         c.c = count;
@@ -192,7 +193,8 @@ public:
         PerfTimer perf;
         SendState(s);
         perf.Add(g_perf_sendstate_ns);
-        Cmd c{Op::Clear};
+        Cmd c{};
+        c.op = Op::Clear;
         c.a = count;
         c.b = flags;
         c.c = color;
@@ -212,7 +214,8 @@ public:
     // rects and points are taken now; the copy itself, CPU or GPU, runs in order like the console's
     void Copy(const Surface& src, const Surface& dst, uint32_t count, uint32_t src_rects, uint32_t dst_points) override {
         PerfTimer perf;
-        Cmd c{Op::Copy};
+        Cmd c{};
+        c.op = Op::Copy;
         c.a = count;
         c.b = count && src_rects ? Scratch(kernel::HostPtr(src_rects), count * 16) : 0;
         c.c = count && dst_points ? Scratch(kernel::HostPtr(dst_points), count * 8) : 0;
@@ -229,7 +232,8 @@ public:
 
     void Present(const Surface& front) override {
         PerfTimer perf;
-        Cmd c{Op::Present};
+        Cmd c{};
+        c.op = Op::Present;
         c.s1 = front;
         c.s1.header = Header(front.header);
         cur_->cmds.push_back(c);
@@ -249,18 +253,22 @@ public:
             written_.insert(data);
             ReadBack(data, true, size);
         }
-        Cmd c{Op::RecordLate};
+        Cmd c{};
+        c.op = Op::RecordLate;
         c.a = data;
         cur_->cmds.push_back(c);
     }
 
     void Flush() override {
-        cur_->cmds.push_back(Cmd{Op::Flush});
+        Cmd flush{};
+        flush.op = Op::Flush;
+        cur_->cmds.push_back(flush);
         Wait(Submit(), WaitFor::Flush, "flush");
     }
 
     void SetGamma(const uint8_t* ramp) override {
-        Cmd c{Op::Gamma};
+        Cmd c{};
+        c.op = Op::Gamma;
         c.data = Put(ramp, 768);
         cur_->cmds.push_back(c);
     }
@@ -306,7 +314,8 @@ private:
         (late ? g_perf_sync_late : g_perf_sync_block)++;
         if (diag::Perf() && logged_.insert(uint64_t(data) << 1 | (late ? 1 : 0)).second)
             LOGI("render thread: read-back of %08X for %s", data, late ? "a NOOVERWRITE lock without a finished copy" : "a lock / BlockOnResource");
-        Cmd c{Op::Sync};
+        Cmd c{};
+        c.op = Op::Sync;
         c.a = data;
         c.b = size;
         cur_->cmds.push_back(c);
@@ -358,7 +367,8 @@ private:
     void SendState(const State& s) {
         const uint8_t* now = reinterpret_cast<const uint8_t*>(&s);
         const uint8_t* sent = reinterpret_cast<const uint8_t*>(&sent_);
-        Cmd c{Op::State};
+        Cmd c{};
+        c.op = Op::State;
         size_t first = cur_->bytes.size();
         // a word at a time, with an exchange: a mark made after its word is taken stays for the next command
         std::array<uint64_t, State::kDirtyWords> marks;

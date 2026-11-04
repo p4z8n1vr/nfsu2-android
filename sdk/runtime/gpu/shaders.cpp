@@ -825,7 +825,7 @@ std::string PixelHlsl(const PixelKey& k) {
         }
         uint32_t mode0 = k.tex_modes & 0x1F;
         body += F("float4 r0 = float4(0, 0, 0, %s), r1 = 0;\n", mode0 ? "t0.a" : "1");
-        Ps ps{k};
+        Ps ps{k, 0, {}, {}, false, false, false, {}};
         uint32_t n = std::min<uint32_t>(k.count & 0xFF, 8);
         for (uint32_t st = 0; st < n; st++) {
             ps.stage = int(st);
