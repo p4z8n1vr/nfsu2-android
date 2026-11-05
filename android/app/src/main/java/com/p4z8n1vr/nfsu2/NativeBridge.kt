@@ -40,6 +40,15 @@ object NativeBridge {
         filename: String
     ): GameValidationResult
 
+    external fun prepareGame(
+        descriptor: Int,
+        filename: String
+    ): GameSessionResult
+
+    external fun closeGameSession(
+        handle: Long
+    )
+
     external fun firstSwapSeen(): Boolean
 
     external fun resetFirstSwap()

@@ -243,3 +243,161 @@ Java_com_p4z8n1vr_nfsu2_NativeBridge_validateGame(
 
     return MakeJavaValidation(env, result);
 }
+
+#include <memory>
+#include <vector>
+
+#include "kernel/disc.h"
+
+namespace {
+
+struct PreparedIsoSession {
+    std::unique_ptr<kernel::Disc> disc;
+    std::vector<uint8_t> executable;
+};
+
+jobject MakeJavaGameSessionResult(
+    JNIEnv* env,
+    android_game::ValidationStatus status,
+    jlong handle,
+    jlong executable_bytes,
+    const std::string& diagnostic
+) {
+    jclass clazz = env->FindClass(
+        "com/p4z8n1vr/nfsu2/GameSessionResult"
+    );
+
+    if (!clazz) return nullptr;
+
+    jmethodID constructor = env->GetMethodID(
+        clazz,
+        "<init>",
+        "(IJJLjava/lang/String;)V"
+    );
+
+    if (!constructor) {
+        env->DeleteLocalRef(clazz);
+        return nullptr;
+    }
+
+    jstring message = env->NewStringUTF(
+        diagnostic.c_str()
+    );
+
+    if (!message) {
+        env->DeleteLocalRef(clazz);
+        return nullptr;
+    }
+
+    jobject result = env->NewObject(
+        clazz,
+        constructor,
+        static_cast<jint>(status),
+        handle,
+        executable_bytes,
+        message
+    );
+
+    env->DeleteLocalRef(message);
+    env->DeleteLocalRef(clazz);
+
+    return result;
+}
+
+} // namespace
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_p4z8n1vr_nfsu2_NativeBridge_prepareGame(
+    JNIEnv* env,
+    jobject,
+    jint descriptor,
+    jstring filename
+) {
+    const std::string name = JavaString(env, filename);
+
+    if (env->ExceptionCheck()) {
+        return nullptr;
+    }
+
+    android_game::ValidationStatus status =
+        android_game::ValidationStatus::ReadError;
+
+    std::string diagnostic;
+    std::unique_ptr<PreparedIsoSession> session;
+
+    try {
+        auto validation = android_game::ValidateFile(
+            descriptor,
+            name
+        );
+
+        status = validation.status;
+        diagnostic = validation.diagnostic;
+
+        if (validation.Ready()) {
+            session = std::make_unique<PreparedIsoSession>();
+            session->disc = std::make_unique<kernel::Disc>();
+
+            std::string error;
+
+            if (!session->disc->OpenFd(descriptor, error)) {
+                status = android_game::ValidationStatus::ReadError;
+                diagnostic = error;
+                session.reset();
+            } else if (!session->disc->Load(
+                "default.xbe",
+                session->executable
+            )) {
+                status = android_game::ValidationStatus::ReadError;
+                diagnostic = "Unable to load executable from ISO";
+                session.reset();
+            } else {
+                diagnostic = "ISO session prepared";
+            }
+        }
+    } catch (const std::exception& error) {
+        status = android_game::ValidationStatus::ReadError;
+        diagnostic = error.what();
+        session.reset();
+    } catch (...) {
+        status = android_game::ValidationStatus::ReadError;
+        diagnostic = "Unexpected ISO preparation failure";
+        session.reset();
+    }
+
+    const jlong handle = session
+        ? reinterpret_cast<jlong>(session.get())
+        : 0;
+
+    const jlong executable_bytes = session
+        ? static_cast<jlong>(session->executable.size())
+        : 0;
+
+    jobject result = MakeJavaGameSessionResult(
+        env,
+        status,
+        handle,
+        executable_bytes,
+        diagnostic
+    );
+
+    if (result && session) {
+        session.release();
+    }
+
+    return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_p4z8n1vr_nfsu2_NativeBridge_closeGameSession(
+    JNIEnv*,
+    jobject,
+    jlong handle
+) {
+    if (handle == 0) return;
+
+    auto* session =
+        reinterpret_cast<PreparedIsoSession*>(handle);
+
+    delete session;
+}

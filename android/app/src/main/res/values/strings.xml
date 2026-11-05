@@ -62,4 +62,7 @@
     <string name="game_library_scanning">Checking the game directory...</string>
     <string name="game_library_not_found">No compatible Xbox ISO found in /sdcard/Underground2. Add an ISO or select one manually.</string>
     <string name="game_library_error">Unable to access the game directory. Check storage permissions and try again.</string>
+    <string name="game_session_preparing">Preparing native ISO session...</string>
+    <string name="game_session_ready">Native ISO session ready. Executable loaded: %1$d bytes. Game boot not started.</string>
+    <string name="game_session_failed">Unable to prepare ISO session: %1$s</string>
 </resources>

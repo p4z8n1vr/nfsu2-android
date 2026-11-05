@@ -48,6 +48,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var gameReady = false
 
     private var selectedGameUri: Uri? = null
+    private var selectedGameFilename: String? = null
+    private var preparedSessionHandle = 0L
+    private var preparationVersion = 0L
+    private var preparationTask: Future<*>? = null
     private var pickerOpen = false
     private var manualSelectionActive = false
 
@@ -270,6 +274,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val displayName =
             filename ?: getString(R.string.game_filename_unknown)
 
+        selectedGameFilename = displayName
+
         selectedGameView.text = getString(
             R.string.selected_game_name,
             displayName
@@ -443,6 +449,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         validationTask?.cancel(true)
 
         selectedGameUri = null
+        selectedGameFilename = null
 
         selectedGameView.setText(
             R.string.selected_game_none
@@ -475,6 +482,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun releaseGraphics() {
+        closePreparedSession()
+
         if (!graphicsRequested && !surfaceAttached) return
 
         if (!detachNativeSurface()) return
@@ -548,6 +557,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 outcome.onSuccess { selected ->
                     if (selected == null) {
                         selectedGameUri = null
+                        selectedGameFilename = null
                         selectedGameView.setText(
                             R.string.selected_game_none
                         )
@@ -561,6 +571,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                         val (file, validation) = selected
 
                         selectedGameUri = Uri.fromFile(file)
+                        selectedGameFilename = file.name
                         selectedGameView.text = getString(
                             R.string.selected_game_name,
                             file.name
@@ -578,6 +589,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     Log.e(LOG_TAG, "Game library scan failed", error)
 
                     selectedGameUri = null
+                    selectedGameFilename = null
                     selectedGameView.setText(
                         R.string.selected_game_none
                     )
@@ -589,6 +601,97 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     )
                 }
             }
+        }
+    }
+
+    private fun prepareSelectedIso() {
+        val uri = selectedGameUri ?: return
+        val filename = selectedGameFilename ?: return
+
+        if (!gameReady || !surfaceAttached) return
+
+        closePreparedSession()
+
+        val requestVersion = preparationVersion
+        showStatus(getString(R.string.game_session_preparing))
+
+        preparationTask = validationExecutor.submit {
+            val outcome = runCatching {
+                contentResolver.openFileDescriptor(uri, "r")?.use {
+                    NativeBridge.prepareGame(
+                        it.fd,
+                        filename
+                    )
+                } ?: throw FileNotFoundException()
+            }
+
+            runOnUiThread {
+                val result = outcome.getOrNull()
+
+                if (
+                    isFinishing ||
+                    isDestroyed ||
+                    requestVersion != preparationVersion ||
+                    !graphicsRequested ||
+                    !surfaceAttached ||
+                    !gameReady
+                ) {
+                    if (result != null && result.handle != 0L) {
+                        NativeBridge.closeGameSession(result.handle)
+                    }
+                    return@runOnUiThread
+                }
+
+                outcome.onSuccess { prepared ->
+                    if (
+                        prepared.status == NativeValidationStatus.READY &&
+                        prepared.handle != 0L
+                    ) {
+                        preparedSessionHandle = prepared.handle
+
+                        showStatus(
+                            getString(
+                                R.string.game_session_ready,
+                                prepared.executableBytes
+                            )
+                        )
+                    } else {
+                        showStatus(
+                            getString(
+                                R.string.game_session_failed,
+                                prepared.diagnostic
+                            )
+                        )
+                    }
+                }.onFailure { error ->
+                    Log.e(
+                        LOG_TAG,
+                        "ISO session preparation failed",
+                        error
+                    )
+
+                    showStatus(
+                        getString(
+                            R.string.game_session_failed,
+                            error.message
+                                ?: error.javaClass.simpleName
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun closePreparedSession() {
+        preparationVersion++
+        preparationTask?.cancel(true)
+        preparationTask = null
+
+        val handle = preparedSessionHandle
+        preparedSessionHandle = 0L
+
+        if (handle != 0L) {
+            NativeBridge.closeGameSession(handle)
         }
     }
 
@@ -650,6 +753,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 showStatus(
                     getString(R.string.graphics_surface_ready)
                 )
+                prepareSelectedIso()
             } else {
                 graphicsRequested = false
                 surfaceView.visibility = View.GONE
@@ -684,6 +788,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        closePreparedSession()
+
         if (detachNativeSurface()) {
             graphicsRequested = false
             updateGraphicsControls()
