@@ -1,6 +1,6 @@
 <div align="center">
 
-# Need for Speed: Underground 2 — Android
+# Need for Speed: Underground 2 for Android
 
 **An unofficial native Android port of the original Xbox version of Need for Speed: Underground 2, powered by static recompilation.**
 
