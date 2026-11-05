@@ -647,14 +647,38 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                         prepared.status == NativeValidationStatus.READY &&
                         prepared.handle != 0L
                     ) {
-                        preparedSessionHandle = prepared.handle
-
-                        showStatus(
-                            getString(
-                                R.string.game_session_ready,
-                                prepared.executableBytes
+                        val mounted = runCatching {
+                            NativeBridge.mountGameSession(
+                                prepared.handle
                             )
-                        )
+                        }.onFailure { error ->
+                            Log.e(
+                                LOG_TAG,
+                                "Xbox disc mounting failed",
+                                error
+                            )
+                        }.getOrDefault(false)
+
+                        if (mounted) {
+                            preparedSessionHandle = prepared.handle
+
+                            showStatus(
+                                getString(
+                                    R.string.game_disc_mounted,
+                                    prepared.executableBytes
+                                )
+                            )
+                        } else {
+                            NativeBridge.closeGameSession(
+                                prepared.handle
+                            )
+
+                            showStatus(
+                                getString(
+                                    R.string.game_disc_mount_failed
+                                )
+                            )
+                        }
                     } else {
                         showStatus(
                             getString(

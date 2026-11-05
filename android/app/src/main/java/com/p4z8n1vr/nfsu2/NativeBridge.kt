@@ -45,6 +45,10 @@ object NativeBridge {
         filename: String
     ): GameSessionResult
 
+    external fun mountGameSession(
+        handle: Long
+    ): Boolean
+
     external fun closeGameSession(
         handle: Long
     )

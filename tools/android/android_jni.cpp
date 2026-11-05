@@ -245,9 +245,13 @@ Java_com_p4z8n1vr_nfsu2_NativeBridge_validateGame(
 }
 
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 #include <vector>
 
+#include "app/app.h"
 #include "kernel/disc.h"
+#include "kernel/kernel.h"
 
 namespace {
 
@@ -255,6 +259,10 @@ struct PreparedIsoSession {
     std::unique_ptr<kernel::Disc> disc;
     std::vector<uint8_t> executable;
 };
+
+std::mutex g_session_mutex;
+std::unordered_set<PreparedIsoSession*> g_sessions;
+PreparedIsoSession* g_mounted_session = nullptr;
 
 jobject MakeJavaGameSessionResult(
     JNIEnv* env,
@@ -382,10 +390,75 @@ Java_com_p4z8n1vr_nfsu2_NativeBridge_prepareGame(
     );
 
     if (result && session) {
+        std::lock_guard lock(g_session_mutex);
+        g_sessions.insert(session.get());
         session.release();
     }
 
     return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_p4z8n1vr_nfsu2_NativeBridge_mountGameSession(
+    JNIEnv*,
+    jobject,
+    jlong handle
+) {
+    if (handle == 0) return JNI_FALSE;
+
+    auto* session =
+        reinterpret_cast<PreparedIsoSession*>(handle);
+
+    std::lock_guard lock(g_session_mutex);
+
+    if (!g_sessions.contains(session) ||
+        g_mounted_session != nullptr ||
+        !session->disc ||
+        session->executable.empty()) {
+        return JNI_FALSE;
+    }
+
+    const auto* index = session->disc->Find(
+        "NFSUNDER\\ZDIR.BIN"
+    );
+
+    if (!index ||
+        index->dir ||
+        index->size < 24 ||
+        index->size % 24 != 0) {
+        return JNI_FALSE;
+    }
+
+    const uint32_t index_size = index->size;
+    const std::string data_directory =
+        app::ExeDir().string();
+
+    if (data_directory.empty()) return JNI_FALSE;
+
+    try {
+        kernel::MountDisc(std::move(session->disc));
+
+        kernel::MountDefaults(
+            data_directory,
+            data_directory
+        );
+
+        std::vector<uint8_t> data;
+
+        if (!kernel::ReadGameFile(
+            "D:\\NFSUNDER\\ZDIR.BIN",
+            data
+        ) || data.size() != index_size) {
+            kernel::MountDisc(nullptr);
+            return JNI_FALSE;
+        }
+
+        g_mounted_session = session;
+        return JNI_TRUE;
+    } catch (...) {
+        kernel::MountDisc(nullptr);
+        return JNI_FALSE;
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -398,6 +471,17 @@ Java_com_p4z8n1vr_nfsu2_NativeBridge_closeGameSession(
 
     auto* session =
         reinterpret_cast<PreparedIsoSession*>(handle);
+
+    std::lock_guard lock(g_session_mutex);
+
+    if (g_sessions.erase(session) == 0) {
+        return;
+    }
+
+    if (g_mounted_session == session) {
+        kernel::MountDisc(nullptr);
+        g_mounted_session = nullptr;
+    }
 
     delete session;
 }
