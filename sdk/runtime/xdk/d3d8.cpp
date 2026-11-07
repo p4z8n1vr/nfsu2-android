@@ -648,6 +648,25 @@ HLE_STDCALL(D3D_KickOffAndWaitForIdle, 0) {
     if (g_backend) g_backend->Flush();
     return 0;
 }
+
+// NFS Underground 2 / XDK 5849:
+// Polls NV2A PFIFO DMA_PUT, DMA_GET and PGRAPH status.
+// The host Vulkan renderer replaces the physical Xbox GPU.
+// Wait for queued host work instead of accessing unmapped NV2A registers.
+X86_FUNC(sub_002EA550) {
+    (void)base;
+
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+
+    if (g_backend)
+        g_backend->Flush();
+
+    LOG_FIRST(4, "d3d: NV2A GPU idle poll handled by host backend");
+
+    // Original function returns with RET (no stack arguments).
+    // After Flush, report GPU idle.
+    kernel::Return(ctx, 0, 0);
+}
 HLE_FASTCALL(CDevice_KickOff, 0) { return 0; }
 
 HLE_STDCALL(D3DDevice_MakeSpace, 0) {
@@ -1075,15 +1094,17 @@ HLE_STDCALL(D3DDevice_SetVertexShader, 1) {
     return 0;
 }
 
-// (register, source, dword count) in ecx/edx/stack: the guest original also copies
-// the data into the fast-constant scratch at 0x259AE0 before tail-calling
-// SetVertexShaderConstantNotInlineFast; the host only needs its own constant copy.
-HLE_FASTCALL(D3DDevice_SetVertexShaderConstant1Fast, 1) {
-    uint32_t reg = a[0], src = a[1], dwords = a[2];
-    for (uint32_t i = 0; i < dwords / 4 && reg + i < kVscCount; i++) {
-        Load(g_state.vsc[reg + i], src + i * 16);
-        CentreVsConstant(reg + i);
+// XDK 5849: ECX = register, EDX = source.
+// No stack arguments; the guest function returns with RET.
+HLE_FASTCALL(D3DDevice_SetVertexShaderConstant1Fast, 0) {
+    const uint32_t reg = a[0];
+    const uint32_t src = a[1];
+
+    if (reg < kVscCount) {
+        Load(g_state.vsc[reg], src);
+        CentreVsConstant(reg);
     }
+
     return 0;
 }
 

@@ -53,6 +53,10 @@ object NativeBridge {
         handle: Long
     )
 
+    external fun bootGameSession(
+        handle: Long
+    ): Boolean
+
     external fun firstSwapSeen(): Boolean
 
     external fun resetFirstSwap()

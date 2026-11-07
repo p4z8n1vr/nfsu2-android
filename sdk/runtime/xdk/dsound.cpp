@@ -455,6 +455,9 @@ float F32(uint32_t v) {
 // DSOUND objects are the host's; .XTLID names linked exports that would still run console code on them
 static void AuditExports() {
     static const uint32_t handled[] = {
+#if defined(__ANDROID__)
+        0x0032D455u,  // XTLID B0067: IDirectSoundBuffer_SetEG
+#endif
         SYM(DirectSoundCreate), SYM(IDirectSound_Release), SYM(DirectSoundUseFullHRTF), SYM(DirectSoundUseLightHRTF),
         SYM(IDirectSound_GetSpeakerConfig),
         SYM(IDirectSound_SetEffectData), SYM(IDirectSound_EnableHeadphones), SYM(IDirectSound_SetMixBinHeadroom),
@@ -743,6 +746,38 @@ BUFFER(SetFrequency, 2) {
     v.freq = a[1];
     return 0;
 }
+// NFSU2 Xbox XDK 5849: XTLID B0067, IDirectSoundBuffer_SetEG.
+// The host mixer does not emulate Xbox envelope generator registers.
+// Handle the public operation without entering the original Xbox DSP code.
+#if defined(__ANDROID__)
+X86_FUNC(sub_0032D455) {
+    (void)base;
+
+    kernel::Args args{ctx};
+    const uint32_t object = args[0];
+
+    uint32_t result = 0x80004005u;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_lock);
+
+        if (Find(object)) {
+            // Envelope generation is currently unsupported by the
+            // host mixer. This is a deliberate compatibility no-op.
+            result = 0;
+        } else {
+            LOG_FIRST(
+                16,
+                "dsound: SetEG rejected unknown buffer %08X",
+                object
+            );
+        }
+    }
+
+    kernel::Return(ctx, result, 2);
+}
+#endif
+
 BUFFER(SetFilter, 2) { return 0; }
 BUFFER(SetHeadroom, 2) {
     v.headroom = Db(-int32_t(a[1]));

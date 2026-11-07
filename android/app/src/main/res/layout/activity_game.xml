@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/launcher_background">
+
+    <SurfaceView
+        android:id="@+id/game_boot_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <TextView
+        android:id="@+id/game_boot_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:padding="@dimen/launcher_padding"
+        android:background="@color/launcher_background"
+        android:text="@string/game_boot_initializing"
+        android:textColor="@color/status_text"
+        android:textSize="@dimen/status_text_size" />
+
+</FrameLayout>

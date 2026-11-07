@@ -32,6 +32,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var storageButton: Button
     private lateinit var selectGameButton: Button
     private lateinit var graphicsButton: Button
+    private lateinit var launchGameButton: Button
     private lateinit var selectedGameView: TextView
     private lateinit var selectedGameTypeView: TextView
     private lateinit var selectedGameStatusView: TextView
@@ -75,6 +76,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         storageButton = findViewById(R.id.grant_storage_access)
         selectGameButton = findViewById(R.id.select_game_file)
         graphicsButton = findViewById(R.id.graphics_control)
+        launchGameButton = findViewById(R.id.launch_game)
         selectedGameView = findViewById(R.id.selected_game)
         selectedGameTypeView = findViewById(R.id.selected_game_type)
         selectedGameStatusView = findViewById(R.id.selected_game_status)
@@ -94,6 +96,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             } else {
                 initializeGraphics()
             }
+        }
+
+        launchGameButton.setOnClickListener {
+            launchExperimentalGame()
         }
 
         updateStorageStatus()
@@ -150,6 +156,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun updateGraphicsControls() {
+        launchGameButton.visibility =
+            if (
+                gameReady &&
+                nativeReady &&
+                selectedGameUri != null &&
+                Environment.isExternalStorageManager()
+            ) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+
         graphicsButton.visibility =
             if (
                 gameReady &&
@@ -460,6 +478,51 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         )
 
         validationDetailsView.visibility = View.GONE
+    }
+
+    private fun launchExperimentalGame() {
+        if (!nativeReady ||
+            !gameReady ||
+            !Environment.isExternalStorageManager()) {
+            return
+        }
+
+        val uri = selectedGameUri ?: return
+        val filename = selectedGameFilename ?: return
+
+        val launchIntent = Intent(
+            this,
+            GameActivity::class.java
+        ).apply {
+            putExtra(Intent.EXTRA_TITLE, filename)
+
+            if (uri.scheme ==
+                android.content.ContentResolver.SCHEME_FILE) {
+                val path = uri.path ?: return
+                putExtra(Intent.EXTRA_TEXT, path)
+            } else {
+                data = uri
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+
+        // The launcher must release its own disc and surface
+        // before the separate game process starts.
+        releaseGraphics()
+
+        runCatching {
+            startActivity(launchIntent)
+        }.onFailure { error ->
+            Log.e(
+                LOG_TAG,
+                "Unable to launch game process",
+                error
+            )
+
+            showStatus(
+                getString(R.string.game_launch_failed)
+            )
+        }
     }
 
     private fun initializeGraphics() {

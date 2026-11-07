@@ -263,6 +263,8 @@ struct PreparedIsoSession {
 std::mutex g_session_mutex;
 std::unordered_set<PreparedIsoSession*> g_sessions;
 PreparedIsoSession* g_mounted_session = nullptr;
+bool g_game_boot_attempted = false;
+bool g_game_boot_running = false;
 
 jobject MakeJavaGameSessionResult(
     JNIEnv* env,
@@ -474,6 +476,11 @@ Java_com_p4z8n1vr_nfsu2_NativeBridge_closeGameSession(
 
     std::lock_guard lock(g_session_mutex);
 
+    // A running guest owns its disc until the game process exits.
+    if (g_game_boot_running && g_mounted_session == session) {
+        return;
+    }
+
     if (g_sessions.erase(session) == 0) {
         return;
     }
@@ -484,4 +491,70 @@ Java_com_p4z8n1vr_nfsu2_NativeBridge_closeGameSession(
     }
 
     delete session;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_p4z8n1vr_nfsu2_NativeBridge_bootGameSession(
+    JNIEnv*,
+    jobject,
+    jlong handle
+) {
+    if (handle == 0) return JNI_FALSE;
+
+    auto* session =
+        reinterpret_cast<PreparedIsoSession*>(handle);
+
+    std::lock_guard lock(g_session_mutex);
+
+    if (g_game_boot_attempted ||
+        !g_sessions.contains(session) ||
+        g_mounted_session != session ||
+        session->executable.empty() ||
+        kernel::MountedDisc() == nullptr) {
+        return JNI_FALSE;
+    }
+
+    const std::string data_directory =
+        app::ExeDir().string();
+
+    if (data_directory.empty()) return JNI_FALSE;
+
+    // The guest runtime is not restartable within one process.
+    g_game_boot_attempted = true;
+
+    try {
+        logx::Init(
+            data_directory,
+            "nfsu2-game",
+            false
+        );
+
+        LOGI("android: starting experimental Xbox boot");
+
+        const bool started = kernel::Boot(
+            std::move(session->executable),
+            "default.xbe",
+            data_directory,
+            data_directory
+        );
+
+        g_game_boot_running = started;
+
+        if (started) {
+            LOGI("android: guest boot thread dispatched");
+        } else {
+            LOGE("android: Xbox kernel boot failed");
+        }
+
+        logx::Flush();
+
+        return started ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception& error) {
+        LOGE("android: boot exception: %s", error.what());
+    } catch (...) {
+        LOGE("android: unexpected boot exception");
+    }
+
+    logx::Flush();
+    return JNI_FALSE;
 }

@@ -66,4 +66,12 @@
     <string name="game_session_failed">Unable to prepare ISO session: %1$s</string>
     <string name="game_disc_mounted">Xbox D: mounted successfully. Executable loaded: %1$d bytes. Game boot not started.</string>
     <string name="game_disc_mount_failed">Unable to mount the Xbox disc filesystem from the prepared ISO.</string>
+    <string name="launch_game_experimental">Launch Game (Experimental)</string>
+    <string name="game_launch_failed">Unable to launch the experimental game process.</string>
+    <string name="game_boot_initializing">Initializing experimental game runtime...</string>
+    <string name="game_boot_invalid_input">No valid Xbox ISO was provided.</string>
+    <string name="game_boot_surface_failed">Unable to create the game Vulkan surface.</string>
+    <string name="game_boot_starting">Starting Xbox game runtime...</string>
+    <string name="game_boot_running">Xbox guest thread started. Waiting for the first frame...</string>
+    <string name="game_boot_failed">Xbox game boot failed. Check the native runtime log.</string>
 </resources>
