@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <thread>
 #include <type_traits>
@@ -125,6 +126,14 @@ bool g_frame_widened = true;  // gpu::Backend::WidensFrame of the backend Create
 std::recursive_mutex g_lock;
 
 std::unordered_map<uint32_t, std::shared_ptr<gpu::VertexShader>> g_vs;
+// XDK programs can also be resident objects in guest memory, not only handles
+// allocated by the HLE CreateVertexShader entry point.
+std::unordered_map<uint32_t, std::shared_ptr<gpu::VertexShader>> g_native_vs;
+constexpr uint32_t kNv2aProgramSlots = 136;
+std::array<std::shared_ptr<gpu::VertexShader>, kNv2aProgramSlots> g_nv2a_slot_vs{};
+std::array<uint32_t, kNv2aProgramSlots * 4> g_nv2a_program{};
+std::array<bool, kNv2aProgramSlots * 4> g_nv2a_written{};
+uint32_t g_nv2a_upload_word = kNv2aProgramSlots * 4;
 std::unordered_map<uint32_t, std::shared_ptr<gpu::PixelShader>> g_ps;
 std::array<uint32_t, 3> g_buffers{};  // front, back surfaces
 uint32_t g_buffer_count = 2;
@@ -351,6 +360,196 @@ void StoreVsConstants(uint32_t reg, uint32_t n, uint32_t data) {
         Load(g_state.vsc[r], data + i * 4);
         CentreVsConstant(r);
     }
+}
+
+// Native XDK vertex object layout: 0x14 header, 16 input
+// records of 16 bytes, then packed push-buffer packets starting at 0x114.
+// These are not the D3DVSD declaration tokens used by CreateVertexShader.
+uint32_t NativeInputBytes(uint32_t type) {
+    if (type == 0x72) return 12;   // FLOAT2H: x,y,w
+    if (type == 0x02) return 0;   // D3DVSDT_NONE
+    if (type == 0x31 || type == 0x35) return 6;  // Three 16-bit components
+    const uint32_t n = (type >> 4) & 15, kind = type & 15;
+    if (n < 1 || n > 4) return 0;
+    switch (kind) {
+        case 0: return type == 0x40 ? 4 : 0;    // D3DCOLOR
+        case 1: case 5: return n * 2;
+        case 2: return n * 4;
+        case 4: return n;
+        case 6: return type == 0x16 ? 4 : 0;
+        default: return 0;
+    }
+}
+
+// SelectVertexShader can supply the declaration separately from
+// the program already uploaded to an NV2A instruction slot.
+std::shared_ptr<gpu::VertexShader> NativeVertexDeclaration(uint32_t handle) {
+    if (auto it = g_vs.find(handle); it != g_vs.end())
+        return it->second;
+
+    const uint32_t obj = handle & ~1u;
+    if (!(handle & 1) || obj < 0x10000 ||
+        uint64_t(obj) + 0x114u > 0x08000000u)
+        return {};
+
+    auto vs = std::make_shared<gpu::VertexShader>();
+    vs->handle = handle;
+    vs->program_type = 0x2078;
+    vs->stream_stride.fill(0);
+    for (auto& in : vs->inputs)
+        in = {-1, 0, 0x02};
+
+    uint32_t active = 0;
+    for (uint32_t r = 0; r < 16; r++) {
+        const uint32_t at = obj + 0x14 + 16 * r;
+        const uint32_t stream = R32(at);
+        const uint32_t off = R32(at + 4);
+        const uint32_t type = R32(at + 8);
+        const uint32_t extra = R32(at + 12);
+
+        if (type == 0x02) continue;
+
+        const uint32_t bytes = NativeInputBytes(type);
+
+        if (stream >= 16 || off >= 0x10000 ||
+            !bytes || (extra & 0xFFFF)) {
+            LOG_FIRST(16,
+                "d3d: native declaration %08X invalid v%u "
+                "stream=%u offset=%u type=%02X extra=%08X",
+                handle, r, stream, off, type, extra);
+            return {};
+        }
+
+        vs->inputs[r] = {int(stream), off, type};
+        vs->stream_stride[stream] =
+            std::max(vs->stream_stride[stream], off + bytes);
+        ++active;
+    }
+
+    if (!active) return {};
+
+    LOG_FIRST(16,
+        "d3d: native declaration %08X accepted: "
+        "%u inputs, stream0 extent=%u",
+        handle, active, vs->stream_stride[0]);
+    return vs;
+}
+
+std::shared_ptr<gpu::VertexShader> NativeVertexShader(uint32_t handle) {
+    if (auto it = g_vs.find(handle); it != g_vs.end()) return it->second;
+    if (auto it = g_native_vs.find(handle); it != g_native_vs.end()) return it->second;
+
+    const uint32_t obj = handle & ~1u;
+    // Avoid treating an arbitrary FVF or device address as a guest shader object.
+    if (!(handle & 1) || obj < 0x10000 || obj >= 0x08000000) return {};
+    const uint32_t flags = R32(obj + 4);
+    const uint32_t instructions = R32(obj + 8);
+    const uint32_t packetWords = R32(obj + 12);
+    if (!(flags & 0x10) || !instructions || instructions > kNv2aProgramSlots ||
+        !packetWords || packetWords > 4096 ||
+        uint64_t(obj) + 0x118u + uint64_t(packetWords) * 4 > 0x08000000u) {
+        LOG_FIRST(8, "d3d: native vertex object %08X rejected (flags %08X instructions %u packet words %u)",
+                  handle, flags, instructions, packetWords);
+        return {};
+    }
+    auto vs = std::make_shared<gpu::VertexShader>();
+    vs->handle = handle;
+    vs->program_type = 0x2078;
+    for (uint32_t r = 0; r < 16; r++) {
+        const uint32_t at = obj + 0x14 + 16 * r;
+        uint32_t stream = R32(at), off = R32(at + 4), type = R32(at + 8);
+        const uint32_t extra = R32(at + 12); // tessellation flags/source (unsupported)
+        if (type == 0x02) continue;
+        uint32_t bytes = NativeInputBytes(type);
+        if (stream >= 16 || off >= 0x10000 || !bytes || (extra & 0xFFFF)) {
+            LOG_FIRST(8, "d3d: native vertex input v%u invalid (stream %u offset %u type %02X extra %08X)",
+                      r, stream, off, type, extra);
+            return {};
+        }
+        vs->inputs[r] = {int(stream), off, type};
+        vs->stream_stride[stream] = std::max(vs->stream_stride[stream], off + bytes);
+    }
+
+    std::array<uint32_t, 192 * 4> constWords{};
+    std::array<bool, 192> haveConstant{};
+    uint32_t constantWord = 192 * 4;
+    const uint32_t begin = obj + 0x114;
+    for (uint32_t i = 0; i < packetWords;) {
+        uint32_t head = R32(begin + i * 4);
+        uint32_t n = (head >> 18) & 0x7FF;
+        uint32_t method = head & 0x1FFC;
+        if ((head & 0xA0030003u) || !n || n > packetWords - i - 1) {
+            LOG_FIRST(8, "d3d: invalid native shader packet %08X at word %u", head, i);
+            return {};
+        }
+        ++i;
+        for (uint32_t j = 0; j < n; j++, i++) {
+            uint32_t m = (head & 0x40000000) ? method : method + j * 4;
+            uint32_t word = R32(begin + i * 4);
+            if (m >= 0x0B00 && m < 0x0B80) {
+                if (vs->program.size() >= instructions * 4u) return {};
+                vs->program.push_back(word);
+            } else if (m == 0x1EA4) { // physical constant register selector
+                constantWord = word < 192 ? word * 4 : 192 * 4;
+            } else if (m >= 0x0B80 && m < 0x0C00) {
+                if (constantWord >= 192 * 4) return {};
+                constWords[constantWord] = word;
+                haveConstant[constantWord / 4] = true;
+                ++constantWord;
+            } else {
+                LOG_FIRST(8, "d3d: native shader packet method %04X unsupported", m);
+                return {};
+            }
+        }
+    }
+    if (vs->program.size() != instructions * 4u || !(vs->program.back() & 1u)) {
+        LOG_FIRST(8, "d3d: native shader program incomplete (%zu/%u DWORDs)",
+                  vs->program.size(), instructions * 4);
+        return {};
+    }
+    for (uint32_t i = 0; i < 192; i++) {
+        if (!haveConstant[i]) continue;
+        std::array<float, 4> c;
+        std::memcpy(c.data(), &constWords[i * 4], sizeof(c));
+        vs->constants.emplace_back(i, c);
+    }
+    g_native_vs.emplace(handle, vs);
+    LOG_FIRST(16, "d3d: native vertex shader %08X parsed, %u instructions, %zu constants",
+              handle, instructions, vs->constants.size());
+    return vs;
+}
+
+void BindVertexShader(uint32_t handle, const std::shared_ptr<gpu::VertexShader>& vs) {
+    Set(g_state.vs_handle, handle);
+    Set(g_state.vs, vs);
+    if (vs) for (const auto& [r, c] : vs->constants) if (r < kVscCount) {
+        Set(g_state.vsc[r], c);
+        CentreVsConstant(r);
+    }
+}
+
+// NV097_SET_TRANSFORM_PROGRAM_LOAD (0x1E9C), PROGRAM (0x0B00),
+// and PROGRAM_START (0x1EA0). The RAM upload is separately tracked so native
+// push-buffer state is no longer silently dropped by Walk / EndPush.
+bool HandleNv2aProgramMethod(uint32_t method, uint32_t value) {
+    if (method == 0x1E9C) {
+        g_nv2a_upload_word = value < kNv2aProgramSlots ? value * 4 : kNv2aProgramSlots * 4;
+        return true;
+    }
+    if (method >= 0x0B00 && method < 0x0B80) {
+        if (g_nv2a_upload_word < g_nv2a_program.size()) {
+            g_nv2a_program[g_nv2a_upload_word] = value;
+            g_nv2a_written[g_nv2a_upload_word] = true;
+            ++g_nv2a_upload_word;
+        }
+        return true;
+    }
+    if (method == 0x1EA0) {
+        if (value < kNv2aProgramSlots && g_nv2a_slot_vs[value])
+            BindVertexShader(g_nv2a_slot_vs[value]->handle, g_nv2a_slot_vs[value]);
+        return true;
+    }
+    return false;
 }
 
 bool g_own_constants = false;  // D3DSCM_NORESERVEDCONSTANTS: c-38 and c-37 are the title's
@@ -1075,22 +1274,10 @@ HLE_STDCALL(D3DDevice_GetVertexShaderFunction, 3) {
 HLE_STDCALL(D3DDevice_SetVertexShader, 1) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     uint32_t h = a[0];
-    Set(g_state.vs_handle, h);
-    Set(g_state.vs, nullptr);
-    if (h & 1) {
-        auto it = g_vs.find(h);
-        if (it != g_vs.end()) {
-            Set(g_state.vs, it->second);
-            // constants declared with the shader load when it is selected
-            for (auto& [reg, v] : it->second->constants)
-                if (reg < kVscCount) {
-                    Set(g_state.vsc[reg], v);
-                    CentreVsConstant(reg);
-                }
-        } else {
-            LOG_FIRST(8, "d3d: SetVertexShader with unknown handle %08X", h);
-        }
-    }
+    auto vs = h & 1 ? NativeVertexShader(h) : nullptr;
+    BindVertexShader(h, vs);
+    if ((h & 1) && !vs)
+        LOG_FIRST(8, "d3d: SetVertexShader with unknown handle %08X", h);
     return 0;
 }
 
@@ -1136,11 +1323,103 @@ HLE_FASTCALL(D3DDevice_SetVertexShaderConstantNotInlineFast, 1) {
 }
 
 HLE_STDCALL(D3DDevice_LoadVertexShader, 2) {
-    LOG_FIRST(4, "d3d: LoadVertexShader %08X at %u is not supported", a[0], a[1]);
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    const uint32_t h = a[0], slot = a[1];
+    auto vs = NativeVertexShader(h);
+    if (slot < kNv2aProgramSlots && vs)
+        g_nv2a_slot_vs[slot] = vs;
+    else LOG_FIRST(8, "d3d: LoadVertexShader invalid handle %08X or slot %u", h, slot);
     return 0;
 }
 HLE_STDCALL(D3DDevice_SelectVertexShader, 2) {
-    LOG_FIRST(4, "d3d: SelectVertexShader %08X at %u is not supported", a[0], a[1]);
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    const uint32_t h = a[0], slot = a[1];
+
+    // Select the already loaded NV2A program address.
+    // The handle supplies the input declaration when valid.
+    auto input = h & 1 ? NativeVertexDeclaration(h) : nullptr;
+    if (!input && (h & 1)) input = NativeVertexShader(h);
+    if (!input) {
+        LOG_FIRST(16,
+            "d3d: SelectVertexShader %08X has no decoded declaration",
+            h);
+        input = g_state.vs;
+    }
+
+    std::shared_ptr<gpu::VertexShader> program;
+    const char* source = "unloaded";
+
+    if (slot < kNv2aProgramSlots) {
+        program = g_nv2a_slot_vs[slot];
+
+        if (program && !program->program.empty()) {
+            source = "loaded";
+        } else {
+            program.reset();
+
+            // Recover a complete program uploaded by NV2A methods.
+            std::vector<uint32_t> words;
+
+            for (uint32_t word = slot * 4;
+                 word + 3 < g_nv2a_program.size();
+                 word += 4) {
+
+                if (!g_nv2a_written[word] ||
+                    !g_nv2a_written[word + 1] ||
+                    !g_nv2a_written[word + 2] ||
+                    !g_nv2a_written[word + 3])
+                    break;
+
+                words.insert(
+                    words.end(),
+                    g_nv2a_program.begin() + word,
+                    g_nv2a_program.begin() + word + 4
+                );
+
+                if (g_nv2a_program[word + 3] & 1u) {
+                    program = std::make_shared<gpu::VertexShader>();
+                    program->program = std::move(words);
+                    program->program_type = 0x2078;
+                    source = "push-buffer";
+                    break;
+                }
+            }
+        }
+    }
+
+    if (program && !program->program.empty()) {
+        if (input) {
+            // Preserve the vertex declaration and stream mapping.
+            auto selected =
+                std::make_shared<gpu::VertexShader>(*input);
+
+            selected->program = program->program;
+            selected->program_type = program->program_type;
+            selected->hash = 0;
+
+            BindVertexShader(
+                selected->handle,
+                selected
+            );
+        } else if (program->handle & 1) {
+            BindVertexShader(program->handle, program);
+        } else {
+            source = "missing-input-layout";
+        }
+    } else if ((h & 1) && input && input->handle == h) {
+        BindVertexShader(h, input);
+    }
+
+    LOG_FIRST(
+        16,
+        "d3d: SelectVertexShader %08X at %u -> %s "
+        "(%zu instructions), active=%08X",
+        h,
+        slot,
+        source,
+        program ? program->program.size() / 4 : 0,
+        g_state.vs_handle
+    );
     return 0;
 }
 HLE_STDCALL(D3DDevice_SetShaderConstantMode, 1) {
@@ -1360,6 +1639,7 @@ void Walk(uint32_t end) {
         if ((head & 0xA0030003) || n * 4 > end - p) break;  // anything but a method header
         for (uint32_t i = 0; i < n; i++, p += 4) {
             uint32_t m = head & 0x40000000 ? method : method + i * 4, v = R32(p);
+            if (HandleNv2aProgramMethod(m, v)) continue;
             float f, *a = g_im_attr;
             bool last = true;  // the slot's last component
             std::memcpy(&f, &v, 4);
@@ -1450,7 +1730,9 @@ HLE_STDCALL(D3DDevice_EndPush, 1) {
             if (m == kInlineArray) {
                 if (prim) vertices.push_back(v);
             } else if (m != kBeginEnd) {
-                if (m >> 2 < g_state.simple.size()) Set(g_state.simple[m >> 2], v);
+                if (!HandleNv2aProgramMethod(m, v) &&
+                    (m >> 2) < g_state.simple.size())
+                    Set(g_state.simple[m >> 2], v);
             } else if (v) {
                 prim = v;
                 vertices.clear();

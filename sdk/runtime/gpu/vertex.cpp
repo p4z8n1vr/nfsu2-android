@@ -252,8 +252,43 @@ int CollectRegs(const State& s, const VertexShader& layout, int* regs, Assembled
     for (int r = 0; r < 16; r++) {
         const auto& in = layout.inputs[size_t(r)];
         if (in.stream < 0 || !in.type || in.type == kTypeNone) continue;
+
+        if (size_t(in.stream) >= 16) {
+            LOG_FIRST(32, "vertex: rejected v%d invalid stream %d",
+                      r, int(in.stream));
+            continue;
+        }
+
         const auto& st = s.streams[size_t(in.stream)];
         if (!st.vb) continue;
+
+        const uint32_t stride =
+            st.stride ? st.stride : layout.stream_stride[size_t(in.stream)];
+
+        // Source size can differ from the padded host vertex format.
+        uint32_t bytes = HostFormat(in.type).bytes;
+        switch (in.type) {
+            case 0x31:  // NORMSHORT3
+            case 0x35:  // SHORT3
+                bytes = 6;
+                break;
+            case 0x34:  // PBYTE3
+                bytes = 3;
+                break;
+            default:
+                break;
+        }
+
+        // Reject attributes exceeding the guest vertex stride.
+        if (!bytes || !stride || in.offset >= stride ||
+            bytes > stride - in.offset) {
+            LOG_FIRST(64,
+                      "vertex: rejected v%d type %02X stream %d "
+                      "offset %u bytes %u stride %u",
+                      r, in.type, int(in.stream), in.offset, bytes, stride);
+            continue;
+        }
+
         regs[nregs++] = r;
         out.regs |= uint16_t(1u << r);
     }
@@ -273,7 +308,11 @@ bool RawReadable(const State& s, const Inputs& inputs) {
         const auto& in = inputs.layout.inputs[size_t(inputs.regs[k])];
         HostElement he = HostFormat(in.type);
         uint32_t stride = StrideOf(s, inputs.layout, in);
-        bool readable = he.format && stride && stride % kStrideAlign == 0 && in.offset < kElementOffsetEnd &&
+        bool readable = he.format && he.bytes && stride &&
+                        stride % kStrideAlign == 0 &&
+                        in.offset < kElementOffsetEnd &&
+                        in.offset < stride &&
+                        he.bytes <= stride - in.offset &&
                         in.offset % std::min<uint32_t>(he.bytes, 4) == 0;
         if (!readable) {
             LOG_FIRST(32, "vertex: converted on the CPU: v%d type %02X offset %u stride %u", inputs.regs[k], in.type,

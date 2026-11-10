@@ -265,7 +265,10 @@ struct DrawShaders {
 };
 struct GuestExtent { uint32_t w, h; float dx = 0; };
 struct PsoKey {
-    uint64_t vs, ps; uint32_t regs, topo, strip, has_rt, has_ds; uint32_t elements[16];
+    uint64_t vs, ps;
+    uint32_t regs, topo, strip, has_rt, has_ds;
+    uint32_t elements[16];
+    uint32_t strides[16];
     uint32_t blend, src, dst, op, wmask, zen, zwrite, zfunc, sten, sfunc, smask, swmask, sfail, szfail, spass, cull, ccw, fill;
     int32_t zbias; float zslope; uint32_t rtfmt; uint32_t sref;
 };
@@ -429,12 +432,17 @@ private:
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat swapFormat_ = VK_FORMAT_B8G8R8A8_UNORM;
     VkExtent2D swapExtent_{};
+    // Surface transform captured when the swapchain was created.
+    VkSurfaceTransformFlagBitsKHR observedSurfaceTransform_ =
+        VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     std::vector<VkImage> swapImages_;
     std::vector<VkImageView> swapViews_;
     std::vector<VkFramebuffer> swapFbs_;
     VkRenderPass swapPass_ = VK_NULL_HANDLE;
     bool swapVsync_ = true;
-    bool swapStale_ = false;  // acquire/present said SUBOPTIMAL: recreate at the next present boundary
+    bool transferPresent_ = false;
+    bool linearTransfer_ = false;
+    bool swapStale_ = false;  // recreate for an outdated surface
     ImageRes offscreen_;
     VkFramebuffer offscreenFb_ = VK_NULL_HANDLE;
     VkCommandPool pool_ = VK_NULL_HANDLE;
@@ -745,7 +753,9 @@ void VulkanBackend::Submit(bool wait, VkSemaphore waitSem, VkSemaphore signalSem
         range.memory = mem; range.offset = 0; range.size = VK_WHOLE_SIZE;
         vkFlushMappedMemoryRanges(device_, 1, &range);
     }
-    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkPipelineStageFlags stage =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1; si.pCommandBuffers = &f.cmd;
     if (waitSem) { si.waitSemaphoreCount = 1; si.pWaitSemaphores = &waitSem; si.pWaitDstStageMask = &stage; }
@@ -801,7 +811,7 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
         VkDescriptorSetLayoutBinding b[10]{};
         for (int i = 0; i < 10; i++) { b[i].binding = uint32_t(i); b[i].descriptorCount = 1; b[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT; }
         b[0].descriptorType = b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        for (int i = 2; i < 6; i++) b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        for (int i = 2; i < 6; i++) b[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         for (int i = 6; i < 10; i++) b[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
         VkDescriptorSetLayoutCreateInfo ci{}; ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         ci.bindingCount = 10; ci.pBindings = b;
@@ -823,9 +833,9 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
             vkCreateFence(device_, &fi, nullptr, &f.fence);
             vkCreateSemaphore(device_, &si, nullptr, &f.imageAvailable);
             vkCreateSemaphore(device_, &si, nullptr, &f.renderFinished);
-            // kSetsPerSegment sets of the one layout (2 uniform + 4 combined + 4
+            // kSetsPerSegment sets of the one layout (2 uniform + 4 sampled images + 4
             // sampler descriptors each), so the set count is the only limit
-            VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * kSetsPerSegment}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * kSetsPerSegment}, {VK_DESCRIPTOR_TYPE_SAMPLER, 4 * kSetsPerSegment}};
+            VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * kSetsPerSegment}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4 * kSetsPerSegment}, {VK_DESCRIPTOR_TYPE_SAMPLER, 4 * kSetsPerSegment}};
             VkDescriptorPoolCreateInfo di{}; di.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             di.maxSets = kSetsPerSegment; di.poolSizeCount = 3; di.pPoolSizes = sizes;
             vkCreateDescriptorPool(device_, &di, nullptr, &f.pool);
@@ -952,6 +962,7 @@ bool VulkanBackend::CreateDeviceAndSwap() {
 bool VulkanBackend::CreateSwapchain() {
     VkSurfaceCapabilitiesKHR caps;
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, surface_, &caps) != VK_SUCCESS) return false;
+    observedSurfaceTransform_ = caps.currentTransform;
     uint32_t fcount = 0; vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, surface_, &fcount, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(fcount); vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, surface_, &fcount, formats.data());
     VkSurfaceFormatKHR chosen = formats.empty() ? VkSurfaceFormatKHR{kBgra, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR} : formats[0];
@@ -973,8 +984,56 @@ bool VulkanBackend::CreateSwapchain() {
     if (caps.maxImageCount) imageCount = std::min(imageCount, caps.maxImageCount);
     VkSwapchainCreateInfoKHR ci{}; ci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     ci.surface = surface_; ci.minImageCount = imageCount; ci.imageFormat = chosen.format; ci.imageColorSpace = chosen.colorSpace;
-    ci.imageExtent = swapExtent_; ci.imageArrayLayers = 1; ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; ci.preTransform = caps.currentTransform;
+    ci.imageExtent = swapExtent_;
+    ci.imageArrayLayers = 1;
+    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+#if defined(__ANDROID__)
+    VkFormatProperties srcProps{}, dstProps{};
+    vkGetPhysicalDeviceFormatProperties(physical_, kBgra, &srcProps);
+    vkGetPhysicalDeviceFormatProperties(physical_, swapFormat_, &dstProps);
+
+    transferPresent_ =
+        (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) &&
+        (srcProps.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
+        (dstProps.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT);
+
+    linearTransfer_ =
+        (srcProps.optimalTilingFeatures &
+         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+
+    if (transferPresent_)
+        ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    else
+        LOGW("vulkan: Android transfer presentation unsupported; using shader fallback");
+#endif
+    ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+#if defined(__ANDROID__)
+    ci.preTransform =
+        (caps.supportedTransforms &
+         VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+            ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+            : caps.currentTransform;
+
+    LOGI(
+        "vk-orientation: current=%u supported=%08X "
+        "selected=%u extent=%ux%u",
+        unsigned(caps.currentTransform),
+        unsigned(caps.supportedTransforms),
+        unsigned(ci.preTransform),
+        swapExtent_.width,
+        swapExtent_.height
+    );
+
+    if (ci.preTransform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
+        LOGW(
+            "vk-orientation: identity transform unsupported; "
+            "using surface transform"
+        );
+    }
+#else
+    ci.preTransform = caps.currentTransform;
+#endif
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR; ci.presentMode = mode; ci.clipped = VK_TRUE;
     if (vkCreateSwapchainKHR(device_, &ci, nullptr, &swapchain_) != VK_SUCCESS) { LOGE("vulkan: no swapchain"); return false; }
     uint32_t n = 0; vkGetSwapchainImagesKHR(device_, swapchain_, &n, nullptr);
@@ -1030,7 +1089,13 @@ void VulkanBackend::ResizeSwapIfNeeded(bool force) {
     if (!want.width || !want.height) return;  // no window yet, or minimised to zero
     want = {std::clamp(want.width, caps.minImageExtent.width, caps.maxImageExtent.width),
             std::clamp(want.height, caps.minImageExtent.height, caps.maxImageExtent.height)};
-    if (!force && want.width == swapExtent_.width && want.height == swapExtent_.height && vsync == swapVsync_) return;
+    if (!force &&
+        want.width == swapExtent_.width &&
+        want.height == swapExtent_.height &&
+        vsync == swapVsync_ &&
+        caps.currentTransform == observedSurfaceTransform_) {
+        return;
+    }
     Flush(); vkDeviceWaitIdle(device_); DestroySwapchain(); CreateSwapchain();
     g_handles.renderPass = swapPass_; g_handles.colorFormat = swapFormat_;
     g_handles.imageCount = uint32_t(swapImages_.size()); g_handles.minImageCount = std::max<uint32_t>(uint32_t(swapImages_.size()), 2);
@@ -1168,7 +1233,8 @@ void VulkanBackend::EnsurePixelShader(const PixelKey& pk, DrawShaders& sh) {
         if (mit != modules_.end()) { sh.ps = mit->second; sh.ph = it->second; return; }
         if (failedModules_.count(it->second)) { sh.ps = VK_NULL_HANDLE; sh.ph = it->second; return; }
     }
-    sh.ps = CompileModule(PixelHlsl(pk), "main", true, sh.ph); shaderSrc_[sh.pkey ^ kSalt] = sh.ph;
+    sh.ps = CompileModule(PixelHlsl(pk), "main", true, sh.ph);
+    shaderSrc_[sh.pkey ^ kSalt] = sh.ph;
 }
 VkSampler VulkanBackend::GetSampler(const VkSamplerCreateInfo& ci) {
     uint64_t key = Hash(&ci, sizeof(ci));
@@ -1193,10 +1259,15 @@ VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkS
         attrs[na].location = na; attrs[na].binding = (e >> 8) & 0xFF; attrs[na].format = VkFormatForDxgi(uint8_t(e & 0xFF)); attrs[na].offset = e >> 16; na++;
         used[attrs[na - 1].binding] = true;
     }
-    // strides live in the draw's buffers, not the D3D12 pipeline key: read them from asm_ while
-    // this draw is assembled (EnsurePipeline is called mid-Draw). Two draws sharing a key but
-    // not strides would share the first pipeline - the noted approximation of this backend.
-    for (uint32_t b = 0; b < asm_.buffer_count && nb < 16; b++) if (used[b]) { binds[nb].binding = b; binds[nb].stride = asm_.buffers[b].stride; binds[nb].inputRate = VK_VERTEX_INPUT_RATE_VERTEX; nb++; }
+    // Binding strides are part of the key used to cache this pipeline.
+    for (uint32_t b = 0; b < 16; b++) {
+        if (!used[b]) continue;
+
+        binds[nb].binding = b;
+        binds[nb].stride = k.strides[b];
+        binds[nb].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        nb++;
+    }
     VkPipelineVertexInputStateCreateInfo vi{}; vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount = nb; vi.pVertexBindingDescriptions = binds; vi.vertexAttributeDescriptionCount = na; vi.pVertexAttributeDescriptions = attrs;
     VkPipelineInputAssemblyStateCreateInfo ia{}; ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1534,7 +1605,7 @@ VkDescriptorSet VulkanBackend::AllocDrawSet(VkBuffer vcBuf, uint64_t vcOff, VkBu
     w[0].descriptorType = w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &bi[0]; w[1].pBufferInfo = &bi[1];
     for (int i = 0; i < 4; i++) {
         ii[i].sampler = samplers[i] ? samplers[i] : nullSampler_; ii[i].imageView = stages.view[i] ? stages.view[i] : nullImage_.SampleView(); ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        w[2 + i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[2 + i].pImageInfo = &ii[i];
+        w[2 + i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[2 + i].pImageInfo = &ii[i];
         ii[4 + i].sampler = ii[i].sampler; w[6 + i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w[6 + i].pImageInfo = &ii[4 + i];
     }
     vkUpdateDescriptorSets(device_, 10, w, 0, nullptr); return set;
@@ -1600,6 +1671,9 @@ uint64_t VertexKeyOf(const State& s, const Assembled& a, const DrawShaders& sh) 
 }
 void BuildPsoKey(const State& s, const Assembled& a, uint64_t vh, uint64_t ph, Target* rt, Target* ds, PsoKey& k) {
     std::memset(&k, 0, sizeof(k)); k.vs = vh; k.ps = ph; k.regs = a.regs;
+    for (uint32_t b = 0; b < a.buffer_count && b < 16; b++) {
+        k.strides[b] = a.buffers[b].stride;
+    }
     for (int r = 0; r < 16; r++) if ((a.regs >> r) & 1) { const VertexElement& e = a.elements[size_t(r)]; k.elements[r] = e.format | uint32_t(e.buffer) << 8 | uint32_t(e.offset) << 16; }
     k.topo = uint32_t(a.topology); k.strip = a.strip; k.has_rt = rt != nullptr; k.has_ds = ds != nullptr; k.rtfmt = rt ? uint32_t(kBgra) : 0;
     k.sref = SimpleState(s, kMStencilRef) & 0xFF;
@@ -1807,14 +1881,47 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     if (sh.prog && !s.vs->hash) s.vs->hash = Hash(s.vs->program.data(), s.vs->program.size() * 4) | 1;
     sh.vkey = VertexKeyOf(s, a, sh); EnsureVertexShader(s, a, sh);
     DrawTextures stages; if (!BindStageTextures(s, stages)) { g_vkPerf.skipped++; return; }
-    PixelKey pk = MakePixelKey(s, stages.info); pk.quad = sh.quad; sh.pkey = Hash(&pk, sizeof(pk)); EnsurePixelShader(pk, sh);
+    PixelKey pk = MakePixelKey(s, stages.info);
+    pk.quad = sh.quad;
+
+    // NV2A combiner methods can change after SetPixelShader().
+    // The live render state is authoritative for programmable PS.
+    if (pk.programmable) {
+        const auto& m = s.simple;
+
+        pk.count = m[kMPsCombinerCount >> 2];
+        pk.final_abcd = m[kMPsFinalAbcd >> 2];
+        pk.final_efg = m[kMPsFinalEfgh >> 2];
+        pk.compare_mode = m[kMPsCompareMode >> 2];
+        pk.dot_mapping = m[kMPsDotMapping >> 2];
+        pk.input_texture = m[kMPsInputTexture >> 2];
+
+        for (int i = 0; i < 8; ++i) {
+            pk.rgb_in[i] =
+                m[(kMPsRgbInputs + i * 4) >> 2];
+            pk.rgb_out[i] =
+                m[(kMPsRgbOutputs + i * 4) >> 2];
+            pk.a_in[i] =
+                m[(kMPsAlphaInputs + i * 4) >> 2];
+            pk.a_out[i] =
+                m[(kMPsAlphaOutputs + i * 4) >> 2];
+        }
+    }
+
+    sh.pkey = Hash(&pk, sizeof(pk));
+    EnsurePixelShader(pk, sh);
     if (!sh.vs || !sh.ps) { g_vkPerf.skipped++; g_vkPerf.nopipeline++; g_vkPerf.nopipeShader++; LOG_FIRST(16, "vulkan: draw skipped, no shader: rt %08X", s.rt.data); return; }
-    PsoKey k; BuildPsoKey(s, a, sh.vh, sh.ph, boundRt_, boundDs_, k);
+    PsoKey k;
+    BuildPsoKey(s, a, sh.vh, sh.ph, boundRt_, boundDs_, k);
     VkPipeline pso = EnsurePipeline(k, sh.vs, sh.ps); if (!pso) { g_vkPerf.skipped++; g_vkPerf.nopipeline++; g_vkPerf.nopipePso++; LOG_FIRST(16, "vulkan: draw skipped, no pipeline: rt %08X vs %llx ps %llx", s.rt.data, (unsigned long long)sh.vh, (unsigned long long)sh.ph); return; }
     GuestExtent size = BoundExtent(boundRt_ ? s.rt : s.zs);
     DrawConstants c{}; FillUvRect(s, prim, count, a, sh, stages, c); FillConstants(s, sh, stages, size, c);
-    static const bool debugDraw = std::getenv("XBE_VK_DEBUG_DRAW") != nullptr;
-    if (debugDraw && presents_ % 60 == 0) LogDraw(s, prim, count, a, sh, stages, c, size);
+    static const bool debugDraw =
+        std::getenv("XBE_VK_DEBUG_DRAW") != nullptr;
+
+    if (debugDraw && presents_ % 60 == 0)
+        LogDraw(s, prim, count, a, sh, stages, c, size);
+
     EnsureSetRoom();  // before the constants: a flush here restarts the upload ring
     Alloc vc = UploadAlloc(sizeof(s.vsc), 256); Alloc dc = UploadAlloc(sizeof(DrawConstants), 256);
     if (!vc.cpu || !dc.cpu) { g_vkPerf.skipped++; return; }
@@ -1828,8 +1935,15 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     vkCmdBindPipeline(Cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, pso);
     vkCmdBindDescriptorSets(Cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
     vkCmdSetBlendConstants(Cmd(), bf);
-    SetViewportScissor(s, size, boundRt_ ? boundRt_->w : boundDs_->w, boundRt_ ? boundRt_->h : boundDs_->h);
-    DrawGeometry(a); EndPass();
+    SetViewportScissor(
+        s,
+        size,
+        boundRt_ ? boundRt_->w : boundDs_->w,
+        boundRt_ ? boundRt_->h : boundDs_->h
+    );
+
+    DrawGeometry(a);
+    EndPass();
     if (cap_) std::fprintf(cap_, "%04u draw rt %08X ds %08X prim %u count %u vs %08X\n", capI_++, s.rt.data, boundDs_ ? s.zs.data : 0, prim, count, s.vs_handle);
 }
 // ---- Clear ----
@@ -1843,6 +1957,7 @@ ScaledRectI ScaledRectOf(const Target& t, int x0, int y0, int x1, int y1) {
 }
 void VulkanBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, uint32_t flags, uint32_t color, float z, uint32_t stencil) {
     VkPerfScope perfClear{g_vkPerf.clear}; g_vkPerf.clears++;
+
     if (cap_) { CapStep(s.rt); std::fprintf(cap_, "%04u clear rt %08X ds %08X flags %X color %08X z %.3f\n", capI_++, s.rt.data, s.zs.data, flags, color, z); }
     Target* rt = (flags & kClearTarget) ? EnsureTarget(s.rt, false) : nullptr;
     Target* ds = (flags & (kClearZ | kClearStencil)) ? EnsureTarget(s.zs, true) : nullptr;
@@ -2235,14 +2350,25 @@ void VulkanBackend::Present(const Surface& front) {
     }
     ResizeSwapIfNeeded();
     Target* t = EnsureTarget(front, false);
-    if (t && LatchCpuWrite(*t)) { UploadTarget(*t, front); g_vkPerf.rtups++; }
+
+    if (t && LatchCpuWrite(*t)) {
+        UploadTarget(*t, front);
+        g_vkPerf.rtups++;
+    }
     PeriodicCapture(t);
     if (rampDirty_) UploadGammaRamp();
     uint32_t imageIndex = 0; VkSemaphore waitSem = VK_NULL_HANDLE; bool haveSwap = swapchain_ != VK_NULL_HANDLE;
     if (haveSwap) {
         VkResult r = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, Cur().imageAvailable, VK_NULL_HANDLE, &imageIndex);
         if (r == VK_ERROR_OUT_OF_DATE_KHR) { ResizeSwapIfNeeded(true); if (swapchain_) r = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, Cur().imageAvailable, VK_NULL_HANDLE, &imageIndex); }
-        if (r == VK_SUBOPTIMAL_KHR) swapStale_ = true;  // still usable this frame; recreate at the boundary below
+        if (r == VK_SUBOPTIMAL_KHR) {
+#if defined(__ANDROID__)
+            // Stable rotated Android surfaces can remain SUBOPTIMAL.
+            LOG_FIRST(1, "vulkan: Android swapchain acquire SUBOPTIMAL");
+#else
+            swapStale_ = true;
+#endif
+        }
         if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
             LOGW("vulkan: vkAcquireNextImageKHR failed %d", int(r));
             // D1: the frame's draws/uploads are already recorded into this slot's open
@@ -2269,24 +2395,189 @@ void VulkanBackend::Present(const Surface& front) {
         }
         waitSem = Cur().imageAvailable;
     }
-    if (t) PrepareBlitSource(t->res, gamma_);
+    if (t) {
+        if (haveSwap && transferPresent_)
+            Transition(t->res, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        else
+            PrepareBlitSource(t->res, gamma_);
+    }
     EnsureRecording();
-    VkFramebuffer fb = haveSwap ? swapFbs_[imageIndex] : offscreenFb_;
-    VkRenderPassBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    bi.renderPass = swapPass_; bi.framebuffer = fb; bi.renderArea = {{0, 0}, {bbW_, bbH_}};
-    VkClearValue clear{}; clear.color.float32[3] = 1; bi.clearValueCount = 1; bi.pClearValues = &clear;
-    vkCmdBeginRenderPass(Cmd(), &bi, VK_SUBPASS_CONTENTS_INLINE);
-    if (t) BlitFrame(*t, bbW_, bbH_);
-    else LOG_FIRST(8, "vulkan: present with no guest front target, clearing swap image %u only", imageIndex);
-    RenderUi(Cmd());
-    vkCmdEndRenderPass(Cmd());
+    if (haveSwap && transferPresent_ && t) {
+        VkImage destination = swapImages_[imageIndex];
+
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = destination;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            Cmd(),
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier
+        );
+
+        VkClearColorValue black{};
+        black.float32[3] = 1.0f;
+
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.levelCount = 1;
+        range.layerCount = 1;
+
+        vkCmdClearColorImage(
+            Cmd(), destination,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            &black, 1, &range
+        );
+
+        VkMemoryBarrier memory{};
+        memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        memory.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        memory.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            Cmd(),
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 1, &memory, 0, nullptr, 0, nullptr
+        );
+
+        const float aspect = t->dx != 0
+            ? (float(t->gw) + t->dx * 2.0f) / float(t->gh)
+            : PresentSrcAspect();
+
+        const float safeAspect = std::max(aspect, 0.01f);
+        const float height = std::min(
+            float(bbH_), float(bbW_) / safeAspect
+        );
+        const float width = height * safeAspect;
+
+        const int32_t left = std::max(
+            0, int32_t((float(bbW_) - width) * 0.5f)
+        );
+        const int32_t top = std::max(
+            0, int32_t((float(bbH_) - height) * 0.5f)
+        );
+        const int32_t right = std::min(
+            int32_t(bbW_), left + int32_t(width + 0.5f)
+        );
+        const int32_t bottom = std::min(
+            int32_t(bbH_), top + int32_t(height + 0.5f)
+        );
+
+        float v0 = 0.0f;
+        float dv = 1.0f;
+
+        if (app::kGame.picture_height && guestH_) {
+            v0 = float(app::kGame.picture_top) / float(guestH_);
+            dv = float(app::kGame.picture_height) / float(guestH_);
+        }
+
+        int32_t sy0 = std::clamp(
+            int32_t(v0 * float(t->h)),
+            0, int32_t(t->h) - 1
+        );
+
+        int32_t sy1 = std::clamp(
+            int32_t((v0 + dv) * float(t->h)),
+            sy0 + 1, int32_t(t->h)
+        );
+
+        if (right > left && bottom > top) {
+            VkImageBlit blit{};
+            blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.srcSubresource.layerCount = 1;
+            blit.srcOffsets[0] = {0, sy0, 0};
+            blit.srcOffsets[1] = {int32_t(t->w), sy1, 1};
+
+            blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.dstSubresource.layerCount = 1;
+            blit.dstOffsets[0] = {left, top, 0};
+            blit.dstOffsets[1] = {right, bottom, 1};
+
+            vkCmdBlitImage(
+                Cmd(),
+                t->res.image,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                destination,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &blit,
+                linearTransfer_ ? VK_FILTER_LINEAR : VK_FILTER_NEAREST
+            );
+        }
+
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = 0;
+
+        vkCmdPipelineBarrier(
+            Cmd(),
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier
+        );
+
+        if (presents_ == 0)
+            LOGI("vulkan: Android direct GPU transfer enabled");
+
+    } else {
+        VkFramebuffer fb = haveSwap
+            ? swapFbs_[imageIndex] : offscreenFb_;
+
+        VkRenderPassBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        bi.renderPass = swapPass_;
+        bi.framebuffer = fb;
+        bi.renderArea = {{0, 0}, {bbW_, bbH_}};
+
+        VkClearValue clear{};
+        clear.color.float32[3] = 1.0f;
+        bi.clearValueCount = 1;
+        bi.pClearValues = &clear;
+
+        vkCmdBeginRenderPass(
+            Cmd(), &bi, VK_SUBPASS_CONTENTS_INLINE
+        );
+
+        if (t) BlitFrame(*t, bbW_, bbH_);
+        else LOG_FIRST(
+            8,
+            "vulkan: present with no guest front target"
+        );
+
+        RenderUi(Cmd());
+        vkCmdEndRenderPass(Cmd());
+    }
     Submit(false, waitSem, haveSwap ? Cur().renderFinished : VK_NULL_HANDLE);
     if (haveSwap) {
         VkPresentInfoKHR pi{}; pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &Cur().renderFinished; pi.swapchainCount = 1; pi.pSwapchains = &swapchain_; pi.pImageIndices = &imageIndex;
         VkResult r = vkQueuePresentKHR(queue_, &pi);
-        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) swapStale_ = true;
-        else if (r != VK_SUCCESS) LOGW("vulkan: vkQueuePresentKHR failed %d (image %u)", int(r), imageIndex);
+
+        if (r == VK_ERROR_OUT_OF_DATE_KHR) {
+            swapStale_ = true;
+        } else if (r == VK_SUBOPTIMAL_KHR) {
+#if defined(__ANDROID__)
+            LOG_FIRST(1, "vulkan: Android swapchain present SUBOPTIMAL");
+#else
+            swapStale_ = true;
+#endif
+        } else if (r != VK_SUCCESS) {
+            LOGW(
+                "vulkan: vkQueuePresentKHR failed %d (image %u)",
+                int(r),
+                imageIndex
+            );
+        }
     }
     if (swapStale_) { swapStale_ = false; ResizeSwapIfNeeded(true); }
     if (diag::Perf() && t && presents_ % 60 == 0) {

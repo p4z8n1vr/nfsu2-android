@@ -174,6 +174,31 @@ foreach(target IN ITEMS nfsu2_xdk_graphics nfsu2_xdk_audio)
     )
 endforeach()
 
+# glslang 16.6.0: native HLSL-to-SPIR-V compiler for Android.
+include(FetchContent)
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
+set(ENABLE_HLSL ON CACHE BOOL "" FORCE)
+set(ENABLE_SPIRV ON CACHE BOOL "" FORCE)
+set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+set(ENABLE_PCH OFF CACHE BOOL "" FORCE)
+set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    glslang
+    GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
+    GIT_TAG 16.6.0
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE
+)
+
+FetchContent_MakeAvailable(glslang)
+
+message(STATUS "NFSU2: glslang 16.6.0 enabled")
+
 # Vulkan rendering backend for Android ARM64
 add_library(nfsu2_vulkan_backend STATIC
     "${NFSU2_RUNTIME_DIR}/gpu/render_thread.cpp"
@@ -187,6 +212,12 @@ target_include_directories(nfsu2_vulkan_backend PRIVATE
 )
 
 target_compile_features(nfsu2_vulkan_backend PRIVATE cxx_std_23)
+
+target_link_libraries(nfsu2_vulkan_backend PRIVATE
+    glslang::glslang
+    glslang::SPIRV
+    glslang::glslang-default-resource-limits
+)
 
 target_compile_options(nfsu2_vulkan_backend PRIVATE
     -fno-strict-aliasing

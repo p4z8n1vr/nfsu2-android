@@ -4,11 +4,11 @@
 //    compiler family the Windows build's HLSL comes from, invoked through IDxcCompiler3 with
 //    -spirv. CMake defines XBE_HAVE_DXC and adds /opt/dxc/include when DXC is installed.
 // 2. glslang's HLSL front end (libglslang, linked): TShader with the HLSL input mode and the
-//    HLSL functionality target, shifted so its bindings land where DXC's do.
+//    HLSL functionality target and explicit SPIR-V resource remapping.
 //
 // Both are asked for the one descriptor layout vulkan.cpp binds: cbuffers b0/b1 at bindings
 // 0/1, textures t0..t3 at 2..5, samplers s0..s3 at 6..9, descriptor set 0. DXC gets it from
-// -fvk-b/t/s-shift; glslang from setShiftBinding with HLSL IO mapping on.
+// -fvk-b/t/s-shift; glslang bindings are remapped after SPIR-V generation.
 #if !defined(_WIN32)
 
 #include "gpu/spirv.h"
@@ -37,7 +37,15 @@
 #endif
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
+#if __has_include(<glslang/SPIRV/GlslangToSpv.h>)
 #include <glslang/SPIRV/GlslangToSpv.h>
+#else
+#include <SPIRV/GlslangToSpv.h>
+#endif
+#endif
+
+#if defined(__ANDROID__) && !defined(XBE_SPIRV_GLSLANG)
+#error "NFSU2 Android requires glslang for HLSL to SPIR-V compilation"
 #endif
 
 namespace gpu {
@@ -50,6 +58,10 @@ std::string g_compiler = "none";
 
 uint64_t CacheKey(const std::string& hlsl, const char* entry, bool fragment) {
     uint64_t key = Hash(entry, std::strlen(entry), fragment ? 0x7073ull : 0x7673ull);
+#if defined(__ANDROID__)
+    constexpr char abi[] = "nfsu2-spv-resource-map-v3";
+    key = Hash(abi, sizeof(abi) - 1, key);
+#endif
     return Hash(hlsl.data(), hlsl.size(), key);
 }
 
@@ -188,6 +200,103 @@ bool CompileDxc(const std::string& hlsl, const char* entry, bool fragment, std::
 #endif  // XBE_SPIRV_DXC
 
 #ifdef XBE_SPIRV_GLSLANG
+// glslang may emit separate HLSL textures and samplers at
+// overlapping bindings. Vulkan expects textures at 2..5,
+// samplers at 6..9, and uniform buffers at 0..1.
+bool RemapGlslangResources(
+    std::vector<uint32_t>& words,
+    std::string* error
+) {
+    std::unordered_map<uint32_t, uint32_t>
+        types, pointees, variables;
+
+    for (size_t i = 5; i < words.size();) {
+        uint32_t count = words[i] >> 16;
+        uint32_t op = words[i] & 0xFFFF;
+
+        if (!count || count > words.size() - i) {
+            if (error)
+                *error = "glslang: malformed SPIR-V instructions";
+            return false;
+        }
+
+        // OpTypeImage, OpTypeSampler, OpTypeSampledImage.
+        if ((op == 25 || op == 26 || op == 27) && count >= 2)
+            types[words[i + 1]] = op;
+
+        // OpTypePointer: result ID -> pointee type ID.
+        if (op == 32 && count >= 4)
+            pointees[words[i + 1]] = words[i + 3];
+
+        // OpVariable with UniformConstant storage class.
+        if (op == 59 && count >= 4 && words[i + 3] == 0)
+            variables[words[i + 2]] = words[i + 1];
+
+        i += count;
+    }
+
+    uint32_t images = 0;
+    uint32_t samplers = 0;
+
+    for (size_t i = 5; i < words.size();) {
+        uint32_t count = words[i] >> 16;
+        uint32_t op = words[i] & 0xFFFF;
+
+        // OpDecorate with DecorationBinding (33).
+        if (op == 71 && count >= 4 && words[i + 2] == 33) {
+            auto variable = variables.find(words[i + 1]);
+
+            if (variable != variables.end()) {
+                auto pointer = pointees.find(variable->second);
+
+                if (pointer != pointees.end()) {
+                    auto type = types.find(pointer->second);
+
+                    if (type != types.end()) {
+                        if (type->second == 27) {
+                            if (error)
+                                *error =
+                                    "glslang: combined image resource "
+                                    "unsupported by separate descriptors";
+                            return false;
+                        }
+
+                        uint32_t slot = words[i + 3];
+
+                        if (slot >= 4) {
+                            if (error)
+                                *error =
+                                    "glslang: unexpected image/sampler "
+                                    "register >= 4";
+                            return false;
+                        }
+
+                        if (type->second == 25) {
+                            words[i + 3] = slot + 2;
+                            ++images;
+                        } else {
+                            words[i + 3] = slot + 6;
+                            ++samplers;
+                        }
+                    }
+                }
+            }
+        }
+
+        i += count;
+    }
+
+    if (images || samplers) {
+        LOGI(
+            "spirv: mapped %u images and %u samplers "
+            "to Vulkan bindings",
+            images, samplers
+        );
+    }
+
+    return true;
+}
+
 bool CompileGlslang(const std::string& hlsl, const char* entry, bool fragment, std::vector<uint32_t>& words,
                     std::string* error) {
     static std::once_flag once;
@@ -203,10 +312,11 @@ bool CompileGlslang(const std::string& hlsl, const char* entry, bool fragment, s
     shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
     shader.setEnvTargetHlslFunctionality1();
     shader.setHlslIoMapping(true);
-    // HLSL register numbers become bindings, shifted into the layout of the header comment
+    // Remapping is applied explicitly to the generated SPIR-V.
     shader.setShiftBinding(glslang::EResUbo, 0);
-    shader.setShiftBinding(glslang::EResTexture, 2);
-    shader.setShiftBinding(glslang::EResSampler, 6);
+    shader.setShiftBinding(glslang::EResTexture, 0);
+    shader.setShiftBinding(glslang::EResSampler, 0);
+    shader.setShiftBinding(glslang::EResCombinedSampler, 0);
     shader.setShiftBinding(glslang::EResImage, 10);
     shader.setAutoMapBindings(false);
     shader.setAutoMapLocations(true);
@@ -230,6 +340,8 @@ bool CompileGlslang(const std::string& hlsl, const char* entry, bool fragment, s
         if (error) *error = "glslang: no valid SPIR-V produced";
         return false;
     }
+    if (!RemapGlslangResources(words, error))
+        return false;
     g_compiler = "glslang";
     return true;
 }
