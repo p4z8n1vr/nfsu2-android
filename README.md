@@ -130,8 +130,6 @@ A successful build does not guarantee that all game functionality works on a giv
 | [`config/`](config/) | Game-specific recompilation configuration |
 | `generated/` | Generated game code; excluded from version control |
 | `assets/` | Local game-specific inputs; excluded from version control |
-| [`xboxrecomp/`](xboxrecomp/) | Recompilation toolkit inherited from the upstream source |
-| [`src/`](src/), [`switch/`](switch/) | Original upstream platform sources retained in the repository |
 
 ## Credits
 
@@ -142,7 +140,6 @@ This project would not be possible without the work of the original developers a
 - **[antoxa2584x/nfsu2-sw](https://github.com/antoxa2584x/nfsu2-sw)** — Original *Need for Speed: Underground 2* static recompilation project and upstream source history.
 - **[XboxXBERecomp](https://github.com/abilliontokens/XboxXBERecomp)** — Recompilation framework and Xbox runtime used as the foundation for the Android integration.
 - **[TGP482](https://github.com/TGP482)** — Original Xbox XBE Recomp work and related Xbox recompilation projects.
-- **[xboxrecomp](https://github.com/sp00nznet/xboxrecomp)** — Original Xbox static recompilation toolkit and its contributors, retained through the upstream sources.
 - **[XenonRecomp](https://github.com/hedge-dev/XenonRecomp)** — Technical inspiration for static recompilation and function-hooking approaches.
 
 ### Libraries and References
@@ -162,10 +159,6 @@ This repository includes code originating from multiple projects. Their individu
 
 - [`sdk/LICENSE`](sdk/LICENSE) — MIT license for the vendored XboxXBERecomp SDK.
 - [`sdk/THIRD_PARTY.txt`](sdk/THIRD_PARTY.txt) — SDK third-party attributions and notices.
-- [`xboxrecomp/LICENSE`](xboxrecomp/LICENSE) — MIT license for the upstream xboxrecomp toolkit.
-- [`xboxrecomp/NOTICE`](xboxrecomp/NOTICE) — Additional attributions, including separately licensed components.
-- [`xboxrecomp/LICENSES/`](xboxrecomp/LICENSES/) — Additional license texts, including LGPL-licensed components.
-- [`xboxrecomp/CONTRIBUTORS.md`](xboxrecomp/CONTRIBUTORS.md) — Upstream contributors.
 
 **There is currently no single project-wide license declared at the repository root.** Do not assume that a license applying to one bundled component automatically applies to the entire repository. Review the relevant notices before redistributing source or binaries.
 

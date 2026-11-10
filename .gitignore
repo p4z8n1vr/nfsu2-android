@@ -1,75 +1,46 @@
-# Build artifacts
+# Generated Android build outputs
 build/
 out/
 bin/
-*.obj
+.gradle/
+.kotlin/
+.cxx/
+local.properties
+*.apk
+*.aab
+*.so
 *.o
-*.lib
+*.obj
 *.a
-*.exe
-*.dll
-*.pdb
-*.ilk
-*.exp
 
-# CMake
+# Native build metadata
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
+compile_commands.json
 
-# Visual Studio
-.vs/
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
-*.sln
-Debug/
-Release/
-x64/
-
-# Generated recompiled code (regenerate from XBE with the recomp pipeline)
-src/recomp/gen/
-
-# Game files (user must provide their own legally-owned copies)
-game/
+# Game and recompilation inputs
+/assets/
+/generated/
 *.xbe
 *.iso
 *.xiso
+game/
 
-# IDE
-.vscode/
-.idea/
+# Compiler and development artifacts
+*.pdb
+*.dSYM/
+*.log
+*.spv
+__pycache__/
+*.pyc
 *.swp
 *.swo
 *~
 
-# OS
-Thumbs.db
+# IDE and OS
+.idea/
+.vscode/
+.vs/
 .DS_Store
-
-# Switch SD staging (contains game data)
-switch_sd/
-!xboxrecomp/tools/conformance/test.xbe
-
-# Build outputs and captures
-*.nro
-*.nacp
-*.wav
-*.raw
-__pycache__/
-*.pyc
-gen/
-
-# Per-game toolkit output (disassembly of the retail XBE)
-xboxrecomp/tools/*/output/
-
-# XboxXBERecomp generated output
-/generated/
-/out/
-/assets/
-
-/android/.gradle/
-/android/.kotlin/
-/android/app/.cxx/
-/android/local.properties
+Thumbs.db
