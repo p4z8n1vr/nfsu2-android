@@ -74,4 +74,19 @@
     <string name="game_boot_starting">Starting Xbox game runtime...</string>
     <string name="game_boot_running">Xbox guest thread started. Waiting for the first frame...</string>
     <string name="game_boot_failed">Xbox game boot failed. Check the native runtime log.</string>
+
+    <string name="controller_up" translatable="false">▲</string>
+    <string name="controller_down" translatable="false">▼</string>
+    <string name="controller_left" translatable="false">◀</string>
+    <string name="controller_right" translatable="false">▶</string>
+    <string name="controller_a" translatable="false">A</string>
+    <string name="controller_b" translatable="false">B</string>
+    <string name="controller_x" translatable="false">X</string>
+    <string name="controller_y" translatable="false">Y</string>
+    <string name="controller_lt" translatable="false">LT</string>
+    <string name="controller_rt" translatable="false">RT</string>
+    <string name="controller_black">Black</string>
+    <string name="controller_white">White</string>
+    <string name="controller_start">Start</string>
+    <string name="controller_back">Back</string>
 </resources>

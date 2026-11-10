@@ -3,4 +3,15 @@
     <dimen name="launcher_padding">16dp</dimen>
     <dimen name="status_spacing">12dp</dimen>
     <dimen name="status_text_size">14sp</dimen>
+
+    <dimen name="controller_button_size">52dp</dimen>
+    <dimen name="controller_slot_size">54dp</dimen>
+    <dimen name="controller_cluster_size">162dp</dimen>
+    <dimen name="controller_menu_width">66dp</dimen>
+    <dimen name="controller_shoulder_width">64dp</dimen>
+    <dimen name="controller_outer_margin">14dp</dimen>
+    <dimen name="controller_button_margin">1dp</dimen>
+    <dimen name="controller_corner_radius">16dp</dimen>
+    <dimen name="controller_stroke_width">1dp</dimen>
+    <dimen name="controller_text_size">13sp</dimen>
 </resources>

@@ -3,4 +3,9 @@
     <color name="launcher_background">#000000</color>
     <color name="status_text">#FFFFFF</color>
     <color name="status_background">#B3000000</color>
+
+    <color name="controller_background">#990D1726</color>
+    <color name="controller_background_pressed">#DC236A9E</color>
+    <color name="controller_outline">#99FFFFFF</color>
+    <color name="controller_text">#FFFFFFFF</color>
 </resources>

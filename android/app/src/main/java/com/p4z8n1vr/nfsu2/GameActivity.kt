@@ -25,6 +25,7 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
 
     private lateinit var gameSurface: SurfaceView
     private lateinit var bootStatus: TextView
+    private var touchController: TouchController? = null
 
     private val executor = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
@@ -87,6 +88,10 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
             bootStatus.setText(R.string.game_boot_failed)
             return
         }
+
+        touchController = TouchController(
+            findViewById(R.id.controller_overlay)
+        )
 
         NativeBridge.resetFirstSwap()
         gameSurface.holder.addCallback(this)
@@ -208,6 +213,7 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onPause() {
+        touchController?.disconnect()
         super.onPause()
 
         // Kill only the experimental :game process, not the launcher.
