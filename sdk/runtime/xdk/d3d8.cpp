@@ -129,6 +129,28 @@ std::unordered_map<uint32_t, std::shared_ptr<gpu::VertexShader>> g_vs;
 // XDK programs can also be resident objects in guest memory, not only handles
 // allocated by the HLE CreateVertexShader entry point.
 std::unordered_map<uint32_t, std::shared_ptr<gpu::VertexShader>> g_native_vs;
+
+// Recompiled XDK code dereferences CDevice.VertexShader directly.
+uint32_t DefaultVertexShaderObject() {
+#if HAS_D3D_FvfShader
+    return SYM(D3D_FvfShader);
+#else
+    static uint32_t object = 0;
+    if (object) return object;
+
+    constexpr uint32_t kObjectSize = 0x14 + 16 * 16;
+    object = mem::AllocSystem(kObjectSize, 16);
+    if (!object) {
+        LOGE("d3d: default vertex shader allocation failed");
+        return 0;
+    }
+
+    std::memset(HostPtr(object), 0, kObjectSize);
+    LOGI("d3d: default guest vertex shader object %08X", object);
+    return object;
+#endif
+}
+
 constexpr uint32_t kNv2aProgramSlots = 136;
 std::array<std::shared_ptr<gpu::VertexShader>, kNv2aProgramSlots> g_nv2a_slot_vs{};
 std::array<uint32_t, kNv2aProgramSlots * 4> g_nv2a_program{};
@@ -522,6 +544,14 @@ std::shared_ptr<gpu::VertexShader> NativeVertexShader(uint32_t handle) {
 void BindVertexShader(uint32_t handle, const std::shared_ptr<gpu::VertexShader>& vs) {
     Set(g_state.vs_handle, handle);
     Set(g_state.vs, vs);
+
+    // Keep the guest-visible shader pointer in sync with host state.
+    if (XDK_CDevice_VertexShader != xdk::kUnknown) {
+        uint32_t object = (vs && (handle & 1u))
+            ? (handle & ~1u) : DefaultVertexShaderObject();
+        if (object) SetDev(XDK_CDevice_VertexShader, object);
+    }
+
     if (vs) for (const auto& [r, c] : vs->constants) if (r < kVscCount) {
         Set(g_state.vsc[r], c);
         CentreVsConstant(r);
@@ -689,9 +719,11 @@ void SetupPresentation(X86Context& ctx, uint32_t w, uint32_t h, uint32_t fmt, ui
     }
     // 60 Hz, widescreen
     if (XDK_CDevice_DisplayFlags != xdk::kUnknown) SetDev(XDK_CDevice_DisplayFlags, 0x400000 | (app::Widescreen() ? 0x10000 : 0));
-#if HAS_D3D_FvfShader
-    if (XDK_CDevice_VertexShader != xdk::kUnknown) SetDev(XDK_CDevice_VertexShader, SYM(D3D_FvfShader));
-#endif
+    // Reset preserves the currently bound guest shader.
+    if (fresh && XDK_CDevice_VertexShader != xdk::kUnknown) {
+        if (uint32_t object = DefaultVertexShaderObject())
+            SetDev(XDK_CDevice_VertexShader, object);
+    }
     if (kVBlank) {
         // notification event, signalled
         SetDev(XDK_CDevice_VBlankEvent, 0x00040000);
