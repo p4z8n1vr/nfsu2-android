@@ -319,6 +319,16 @@ private:
         std::vector<VkDeviceMemory> uploadFlushMems;
         uint64_t used = 0; VkDescriptorPool pool = VK_NULL_HANDLE; uint32_t sets = 0; uint64_t gen = 0;
         VkSemaphore imageAvailable = VK_NULL_HANDLE, renderFinished = VK_NULL_HANDLE;
+        struct CachedFramebuffer {
+            VkRenderPass pass = VK_NULL_HANDLE;
+            VkImageView color = VK_NULL_HANDLE;
+            VkImageView depth = VK_NULL_HANDLE;
+            uint32_t width = 0;
+            uint32_t height = 0;
+            VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        };
+
+        std::vector<CachedFramebuffer> cachedFramebuffers;
         std::vector<std::function<void()>> garbage;
     };
     struct Alloc { VkBuffer buffer = VK_NULL_HANDLE; uint64_t off = 0; uint8_t* cpu = nullptr; };
@@ -398,7 +408,7 @@ private:
     void DrawGeometry(const Assembled& a);
     void LogDraw(const State& s, uint32_t prim, uint32_t count, const Assembled& a, const DrawShaders& sh, const DrawTextures& stages,
                  const DrawConstants& c, GuestExtent size);
-    void BeginTargetPass(Target* rt, Target* ds, VkFramebuffer& fbOut);
+    bool BeginTargetPass(Target* rt, Target* ds, VkFramebuffer& fbOut);
     void EndPass();
     void PrepareBlitSource(ImageRes& src, bool gamma);
     void BlitInto(Target& dst, ImageRes& src, const float uv[4], bool gamma, bool alpha, uint32_t taps, float mul, bool over);
@@ -448,6 +458,7 @@ private:
     VkCommandPool pool_ = VK_NULL_HANDLE;
     Frame frames_[kFrames];
     uint64_t frame_ = 0, presents_ = 0;
+    uint64_t fbCreated_ = 0, fbHits_ = 0;
     bool recording_ = false; uint64_t segmentGen_ = 0;  // bumped every time EnsureRecording opens a segment
     // D2: submissions successfully queued, published by Submit (render thread) after
     // vkQueueSubmit and read by DeliverLate (title thread). This atomic counter, plus
@@ -708,6 +719,7 @@ void VulkanBackend::EnsureSetRoom() { if (recording_ && Cur().sets >= kSetsPerSe
 void VulkanBackend::RunGarbage(Frame& f) { for (auto& fn : f.garbage) fn(); f.garbage.clear(); }
 void VulkanBackend::WaitFrame(Frame& f) {
     if (f.fencePending) { vkWaitForFences(device_, 1, &f.fence, VK_TRUE, UINT64_MAX); f.fencePending = false; }
+    f.cachedFramebuffers.clear();
     RunGarbage(f);
 }
 void VulkanBackend::DiscardRecordedLate() {
@@ -1610,22 +1622,142 @@ VkDescriptorSet VulkanBackend::AllocDrawSet(VkBuffer vcBuf, uint64_t vcOff, VkBu
     }
     vkUpdateDescriptorSets(device_, 10, w, 0, nullptr); return set;
 }
-void VulkanBackend::BeginTargetPass(Target* rt, Target* ds, VkFramebuffer& fbOut) {
-    VkRenderPass rp = RenderPassFor(rt ? kBgra : VK_FORMAT_UNDEFINED, depthFormat_, rt != nullptr, ds != nullptr);
-    if (rt) Transition(rt->res, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    if (ds) Transition(ds->res, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-    VkImageView views[2]; uint32_t n = 0;
-    if (rt) views[n++] = rt->res.view;
-    if (ds) views[n++] = ds->res.view;
-    uint32_t w = rt ? rt->res.w : ds->res.w, h = rt ? rt->res.h : ds->res.h;
-    VkFramebufferCreateInfo fi{}; fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fi.renderPass = rp; fi.attachmentCount = n; fi.pAttachments = views; fi.width = w; fi.height = h; fi.layers = 1;
-    fbOut = VK_NULL_HANDLE; vkCreateFramebuffer(device_, &fi, nullptr, &fbOut);
-    Cur().garbage.push_back([this, fb = fbOut] { if (fb) vkDestroyFramebuffer(device_, fb, nullptr); });
-    VkRenderPassBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    bi.renderPass = rp; bi.framebuffer = fbOut; bi.renderArea = {{0, 0}, {w, h}};
-    vkCmdBeginRenderPass(Cmd(), &bi, VK_SUBPASS_CONTENTS_INLINE);
+bool VulkanBackend::BeginTargetPass(
+    Target* rt,
+    Target* ds,
+    VkFramebuffer& fbOut
+) {
+    fbOut = VK_NULL_HANDLE;
+
+    if (!rt && !ds)
+        return false;
+
+    VkRenderPass rp = RenderPassFor(
+        rt ? kBgra : VK_FORMAT_UNDEFINED,
+        depthFormat_,
+        rt != nullptr,
+        ds != nullptr
+    );
+
+    if (!rp)
+        return false;
+
+    if (rt)
+        Transition(
+            rt->res,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        );
+
+    if (ds)
+        Transition(
+            ds->res,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        );
+
+    VkImageView views[2]{};
+    uint32_t n = 0;
+
+    const VkImageView color =
+        rt ? rt->res.view : VK_NULL_HANDLE;
+    const VkImageView depth =
+        ds ? ds->res.view : VK_NULL_HANDLE;
+
+    if (rt)
+        views[n++] = color;
+
+    if (ds)
+        views[n++] = depth;
+
+    const uint32_t w = rt ? rt->res.w : ds->res.w;
+    const uint32_t h = rt ? rt->res.h : ds->res.h;
+
+    // A cache entry is valid only within the current GPU
+    // command submission. WaitFrame retires all entries.
+    EnsureRecording();
+    Frame& frame = Cur();
+
+    for (const auto& entry : frame.cachedFramebuffers) {
+        if (entry.pass == rp &&
+            entry.color == color &&
+            entry.depth == depth &&
+            entry.width == w &&
+            entry.height == h) {
+
+            fbOut = entry.framebuffer;
+            ++fbHits_;
+            break;
+        }
+    }
+
+    if (!fbOut) {
+        VkFramebufferCreateInfo fi{};
+        fi.sType =
+            VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fi.renderPass = rp;
+        fi.attachmentCount = n;
+        fi.pAttachments = views;
+        fi.width = w;
+        fi.height = h;
+        fi.layers = 1;
+
+        VkResult result = vkCreateFramebuffer(
+            device_,
+            &fi,
+            nullptr,
+            &fbOut
+        );
+
+        if (result != VK_SUCCESS || !fbOut) {
+            LOGE(
+                "vulkan: framebuffer creation failed: %d",
+                int(result)
+            );
+            fbOut = VK_NULL_HANDLE;
+            return false;
+        }
+
+        ++fbCreated_;
+
+        frame.cachedFramebuffers.push_back({
+            rp,
+            color,
+            depth,
+            w,
+            h,
+            fbOut
+        });
+
+        // Destroy only after this submission completes.
+        frame.garbage.push_back(
+            [this, framebuffer = fbOut] {
+                vkDestroyFramebuffer(
+                    device_,
+                    framebuffer,
+                    nullptr
+                );
+            }
+        );
+    }
+
+    VkRenderPassBeginInfo bi{};
+    bi.sType =
+        VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    bi.renderPass = rp;
+    bi.framebuffer = fbOut;
+    bi.renderArea = {
+        {0, 0},
+        {w, h}
+    };
+
+    vkCmdBeginRenderPass(
+        Cmd(),
+        &bi,
+        VK_SUBPASS_CONTENTS_INLINE
+    );
+
+    return true;
 }
+
 void VulkanBackend::EndPass() { vkCmdEndRenderPass(Cmd()); }
 void VulkanBackend::SetViewportScissor(const State& s, GuestExtent size, uint32_t targetW, uint32_t targetH) {
     float W = float(targetW), H = float(targetH);
@@ -1931,7 +2063,11 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     for (int i = 0; i < 4; i++) samplers[i] = StageSamplerFor(s, i, stages, clampCoords);
     VkDescriptorSet set = AllocDrawSet(vc.buffer, vc.off, dc.buffer, dc.off, stages, samplers);
     if (!set) { g_vkPerf.skipped++; g_vkPerf.nopipeline++; g_vkPerf.nopipeSet++; LOG_FIRST(16, "vulkan: draw skipped, no descriptor set: rt %08X present %llu", s.rt.data, (unsigned long long)presents_); return; }
-    VkFramebuffer fb; BeginTargetPass(boundRt_, boundDs_, fb);
+    VkFramebuffer fb;
+    if (!BeginTargetPass(boundRt_, boundDs_, fb)) {
+        ++g_vkPerf.skipped;
+        return;
+    }
     vkCmdBindPipeline(Cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, pso);
     vkCmdBindDescriptorSets(Cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
     vkCmdSetBlendConstants(Cmd(), bf);
@@ -1967,7 +2103,12 @@ void VulkanBackend::Clear(const State& s, uint32_t count, const uint8_t* rects, 
         if (count && rects) for (uint32_t i = 0; i < count; i++) { int32_t r[4]; std::memcpy(r, rects + size_t(i) * sizeof(r), sizeof(r)); rs.push_back(ScaledRectOf(*t, r[0], r[1], r[2], r[3])); }
         else { const auto& v = s.viewport; rs.push_back(ScaledRectOf(*t, int(v.x), int(v.y), int(v.x + v.w), int(v.y + v.h))); }
         if (!t->depth && LatchCpuWrite(*t)) UploadTarget(*t, s.rt);
-        VkFramebuffer fb; BeginTargetPass(t->depth ? nullptr : t, t->depth ? t : nullptr, fb);
+        VkFramebuffer fb;
+        if (!BeginTargetPass(
+                t->depth ? nullptr : t,
+                t->depth ? t : nullptr,
+                fb))
+            continue;
         std::vector<VkClearRect> vrs;
         for (auto& r : rs) if (r.x1 > r.x0 && r.y1 > r.y0) { VkClearRect cr{}; cr.rect.offset = {r.x0, r.y0}; cr.rect.extent = {uint32_t(r.x1 - r.x0), uint32_t(r.y1 - r.y0)}; cr.baseArrayLayer = 0; cr.layerCount = 1; vrs.push_back(cr); }
         if (!vrs.empty()) {
@@ -2024,7 +2165,11 @@ void VulkanBackend::UploadTarget(Target& t, const Surface& s) {
         float sc = float(t.w) / (float(t.gw) + t.dx * 2);
         std::array<float, 4> vp{t.dx * sc, 0, float(t.gw) * sc, float(t.h)};
         PrepareBlitSource(tex, false);
-        VkFramebuffer fb; BeginTargetPass(&t, nullptr, fb);
+        VkFramebuffer fb;
+        if (!BeginTargetPass(&t, nullptr, fb)) {
+            DeferDestroyImage(tex);
+            return;
+        }
         BlitToImage(kBgra, t.w, t.h, tex, uv, false, true, 1, 1.0f, over, &vp);
         EndPass(); t.drawn = true; boundRt_ = boundDs_ = nullptr;
     } else BlitInto(t, tex, uv, false, true, 1, 1.0f, over);
@@ -2065,7 +2210,9 @@ void VulkanBackend::BlitToImage(VkFormat rtvFormat, uint32_t w, uint32_t h, Imag
 }
 void VulkanBackend::BlitInto(Target& dst, ImageRes& src, const float uv[4], bool gamma, bool alpha, uint32_t taps, float mul, bool over) {
     PrepareBlitSource(src, gamma);
-    VkFramebuffer fb; BeginTargetPass(&dst, nullptr, fb);
+    VkFramebuffer fb;
+    if (!BeginTargetPass(&dst, nullptr, fb))
+        return;
     BlitToImage(kBgra, dst.w, dst.h, src, uv, gamma, alpha, taps, mul, over, nullptr);
     EndPass(); dst.drawn = true; boundRt_ = boundDs_ = nullptr;
 }
@@ -2174,7 +2321,9 @@ void VulkanBackend::Copy(const Surface& src, const Surface& dst, uint32_t count,
             float uv[4] = {(x0 + srcT->dx) / srcWide, y0 / srcT->gh, (x1 - x0) / srcWide, (y1 - y0) / srcT->gh};
             std::array<float, 4> vp{(dx + dstT->dx) * dstScale, dy * dstScale, (x1 - x0) * dstScale, (y1 - y0) * dstScale};
             PrepareBlitSource(srcT->res, false);
-            VkFramebuffer fb; BeginTargetPass(dstT, nullptr, fb);
+            VkFramebuffer fb;
+            if (!BeginTargetPass(dstT, nullptr, fb))
+                continue;
             BlitToImage(kBgra, dstT->w, dstT->h, srcT->res, uv, false, true, uint32_t(std::ceil(std::max(srcScale / dstScale, 1.0f) - 1e-3f)), 1.0f, false, &vp);
             EndPass();
         }
@@ -2197,7 +2346,9 @@ bool VulkanBackend::DepthCopyDraw(const State& s) {
     Alloc cb = UploadAlloc(256, 256);
     VkDescriptorSet set = cb.cpu ? AllocDrawSet(cb.buffer, cb.off, cb.buffer, cb.off, stages, samplers) : VK_NULL_HANDLE;
     if (!set) { g_vkPerf.skipped++; LOG_FIRST(16, "vulkan: depth copy skipped, no descriptor set: rt %08X present %llu", s.rt.data, (unsigned long long)presents_); return true; }
-    VkFramebuffer fb; BeginTargetPass(nullptr, &dst, fb);
+    VkFramebuffer fb;
+    if (!BeginTargetPass(nullptr, &dst, fb))
+        return true;
     vkCmdBindPipeline(Cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vkCmdBindDescriptorSets(Cmd(), VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &set, 0, nullptr);
     VkViewport vp{0, float(dst.h), float(dst.w), -float(dst.h), 0, 1}; vkCmdSetViewport(Cmd(), 0, 1, &vp);
@@ -2306,6 +2457,20 @@ void VulkanBackend::LogPerf() {
          p.draws / n, p.raw / n, p.skipped / n, p.nopipeline / n, p.nopipeShader / n, p.nopipePso / n, p.nopipeSet / n, (unsigned long long)p.staleAlloc, p.verts / n / 1000.0, p.upload / n / 1048576.0, p.overflow / n,
          p.texups / n, p.texupBytes / n / 1048576.0, p.newtex / n, p.targets / n, p.rtups / n, p.syncs / n,
          (unsigned long long)p.shaders, (unsigned long long)p.psos, p.clears / n, p.copies / n);
+    LOGI(
+        "perf: framebuffer cache %.1f created/frame "
+        "%.1f reused/frame (%.1f%% hits)",
+        double(fbCreated_) / n,
+        double(fbHits_) / n,
+        100.0 * double(fbHits_) /
+            double(std::max<uint64_t>(
+                fbCreated_ + fbHits_, 1
+            ))
+    );
+
+    fbCreated_ = 0;
+    fbHits_ = 0;
+
     g_vkPerf = VkPerf{};
     perfT_ = VkPerfClock::now();
     perfFrames_ = 0;
