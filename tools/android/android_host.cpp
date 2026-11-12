@@ -148,14 +148,12 @@ float HostAspect() {
 float RenderScale(uint32_t guest_height) {
     if (!guest_height) return 1.0f;
 
-    float desired_height =
-        float(Output().height) *
-        (float(Get().render_percent) / 100.0f);
+    // Android: 100% means the original Xbox render resolution.
+    // Presentation still scales the image to the device screen.
+    const float scale =
+        float(Get().render_percent) / 100.0f;
 
-    return std::max(
-        desired_height / float(guest_height),
-        0.1f
-    );
+    return std::clamp(scale, 0.1f, 4.0f);
 }
 
 void Pace() {
