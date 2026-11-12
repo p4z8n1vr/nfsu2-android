@@ -279,13 +279,17 @@ int CollectRegs(const State& s, const VertexShader& layout, int* regs, Assembled
                 break;
         }
 
-        // Reject attributes exceeding the guest vertex stride.
-        if (!bytes || !stride || in.offset >= stride ||
-            bytes > stride - in.offset) {
-            LOG_FIRST(64,
-                      "vertex: rejected v%d type %02X stream %d "
-                      "offset %u bytes %u stride %u",
-                      r, in.type, int(in.stream), in.offset, bytes, stride);
+        // Preserve attributes spanning adjacent vertex records.
+        // Their offsets must remain inside the guest's supported range.
+        if (!bytes || !stride ||
+            uint64_t(in.offset) + bytes > 0x10000u) {
+            LOG_FIRST(
+                16,
+                "vertex: invalid attribute v%d type %02X "
+                "stream %d offset %u bytes %u stride %u",
+                r, in.type, int(in.stream),
+                in.offset, bytes, stride
+            );
             continue;
         }
 
@@ -311,8 +315,7 @@ bool RawReadable(const State& s, const Inputs& inputs) {
         bool readable = he.format && he.bytes && stride &&
                         stride % kStrideAlign == 0 &&
                         in.offset < kElementOffsetEnd &&
-                        in.offset < stride &&
-                        he.bytes <= stride - in.offset &&
+                        uint64_t(in.offset) + he.bytes <= kElementOffsetEnd &&
                         in.offset % std::min<uint32_t>(he.bytes, 4) == 0;
         if (!readable) {
             LOG_FIRST(32, "vertex: converted on the CPU: v%d type %02X offset %u stride %u", inputs.regs[k], in.type,
@@ -333,21 +336,107 @@ void GatherVertices(const State& s, const DrawRange& d, const uint8_t* data, uin
 }
 
 // returns the buffer slot the stream got
-int AddRawBuffer(const State& s, const VertexShader& layout, const VertexShader::Input& in, const DrawRange& d,
+int AddRawBuffer(const State& s, const VertexShader& layout,
+                 const VertexShader::Input& in, const DrawRange& d,
                  bool dense, Assembled& out) {
     using namespace kernel;
+
     const auto& st = s.streams[size_t(in.stream)];
-    uint32_t stride = StrideOf(s, layout, in);
-    const uint8_t* data = static_cast<const uint8_t*>(HostPtr(mem::VirtualFromPhysical(R32(st.vb + kResData))));
-    int slot = int(out.buffer_count);
-    if (dense) {
-        out.buffers[out.buffer_count++] = {data + size_t(d.first_vertex) * stride, d.span * stride, stride};
-    } else {
-        auto& g = out.gathered[out.buffer_count];
-        GatherVertices(s, d, data, stride, g);
-        out.buffers[out.buffer_count++] = {g.data(), d.count * stride, stride};
+    const uint32_t stride = StrideOf(s, layout, in);
+    const uint32_t address =
+        mem::VirtualFromPhysical(R32(st.vb + kResData));
+    const auto* data =
+        static_cast<const uint8_t*>(HostPtr(address));
+
+    const uint32_t slot = out.buffer_count;
+    const uint32_t extent =
+        layout.stream_stride[size_t(in.stream)];
+    const uint32_t extra =
+        extent > stride ? extent - stride : 0;
+
+    if (dense && !extra) {
+        out.buffers[out.buffer_count++] = {
+            data + size_t(d.first_vertex) * stride,
+            d.span * stride,
+            stride
+        };
+        return int(slot);
     }
-    return slot;
+
+    auto& buffer = out.gathered[slot];
+
+    if (dense) {
+        const size_t size = size_t(d.span) * stride;
+        buffer.resize(size + extra, 0);
+        std::memcpy(
+            buffer.data(),
+            data + size_t(d.first_vertex) * stride,
+            size
+        );
+
+        // Preserve trailing guest bytes when the extra range is mapped.
+        const uint64_t tail = uint64_t(address) +
+            (uint64_t(d.first_vertex) + d.span) * stride;
+
+        if (extra && tail + extra <= 0x100000000ULL &&
+            mem::IsCommitted(uint32_t(tail)) &&
+            mem::IsCommitted(uint32_t(tail + extra - 1))) {
+            std::memcpy(
+                buffer.data() + size,
+                HostPtr(uint32_t(tail)),
+                extra
+            );
+        }
+
+        out.buffers[out.buffer_count++] = {
+            buffer.data(),
+            uint32_t(buffer.size()),
+            stride
+        };
+        return int(slot);
+    }
+
+    if (!extra) {
+        GatherVertices(s, d, data, stride, buffer);
+        out.buffers[out.buffer_count++] = {
+            buffer.data(),
+            uint32_t(buffer.size()),
+            stride
+        };
+        return int(slot);
+    }
+
+    // Sparse indices need independent records so an overlapping
+    // attribute still reads the bytes following its original vertex.
+    const uint32_t expandedStride = stride + extra;
+    buffer.resize(size_t(d.count) * expandedStride, 0);
+
+    for (uint32_t i = 0; i < d.count; ++i) {
+        const uint32_t vertex = DrawVertex(s, d, i);
+        const uint64_t src =
+            uint64_t(address) + uint64_t(vertex) * stride;
+        const uint64_t end = src + expandedStride;
+
+        if (end > 0x100000000ULL ||
+            !mem::IsCommitted(uint32_t(src)) ||
+            !mem::IsCommitted(uint32_t(end - 1))) {
+            continue;
+        }
+
+        std::memcpy(
+            buffer.data() + size_t(i) * expandedStride,
+            HostPtr(uint32_t(src)),
+            expandedStride
+        );
+    }
+
+    out.buffers[out.buffer_count++] = {
+        buffer.data(),
+        uint32_t(buffer.size()),
+        expandedStride
+    };
+
+    return int(slot);
 }
 
 // primitives the input assembler draws without a rebuilt index list
